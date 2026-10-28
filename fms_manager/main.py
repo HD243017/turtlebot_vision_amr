@@ -29,7 +29,6 @@ try:
     from db_manager import DBManager
 except ImportError:
     class DBManager:
-        """DB매니저.py가 없을 때 터미널에 로그만 찍어주는 임시(Mock) 클래스"""
         def __init__(self):
             print("[DB-MOCK] db_manager.py 미감지 -> 터미널 출력 모드로 대체 동작합니다.")
 
@@ -160,10 +159,8 @@ class CentralManager(Node if ROS_AVAILABLE else object):
         pcb_cv_inspector3_2.py의 execute_inspection_sequence() 내부에서
         robot_caller(db_record)로 자동 호출되는 콜백 함수입니다.
         """
-        print("\n" + "★" * 60)
         print(f" [MAIN] 검사대 판정 결과 수신 완료! (결과: {db_record['final_decision']})")
         print(f" [MAIN] 저장된 스냅샷 경로: {db_record['img_path']}")
-        print("★" * 60)
 
         # 1. 최신 검사 정보 갱신 및 작업 큐(스케줄러)에 등록
         self.system_state["latest_inspection"] = db_record
@@ -174,7 +171,7 @@ class CentralManager(Node if ROS_AVAILABLE else object):
         if self.system_state["robot"]["mission_state"] == "IDLE_WAIT" and self.current_job is None:
             self.dispatch_next_job()
         else:
-            print(f" ⏳ [스케줄러] 현재 로봇이 바쁩니다({self.system_state['robot']['mission_state']}). 대기열에 추가됨 (대기: {len(self.job_queue)}건)")
+            print(f" [스케줄러] 현재 로봇이 바쁩니다({self.system_state['robot']['mission_state']}). 대기열에 추가됨 (대기: {len(self.job_queue)}건)")
 
     def dispatch_next_job(self):
         """대기열에서 가장 먼저 검사된 기판을 꺼내 A* 노드로 호출 명령 전송"""
@@ -186,7 +183,7 @@ class CentralManager(Node if ROS_AVAILABLE else object):
         self.job_start_time = time.time()
 
         decision = self.current_job["final_decision"]  # "PASS" 또는 "FAIL"
-        print(f"\n🚀 [스케줄러 배차 시작] 판정 결과 '{decision}' 기판 이송을 위해 터틀봇을 검사대로 호출합니다!")
+        print(f"\n [스케줄러 배차 시작] 판정 결과 '{decision}' 기판 이송을 위해 터틀봇을 검사대로 호출합니다!")
 
         # ros2_astar_dwa.cpp의 commandCallback 규격에 맞춰 판정 결과와 CALL 명령 전송
         self.send_task_command(decision)
@@ -198,14 +195,14 @@ class CentralManager(Node if ROS_AVAILABLE else object):
             msg = String()
             msg.data = cmd_str
             self.pub_task_cmd.publish(msg)
-            print(f" 📤 [main.py ➔ A* 명령 전송] /task_command : '{cmd_str}'")
+            print(f" [main.py ➔ A* 명령 전송] /task_command : '{cmd_str}'")
         else:
             print(f" [ROS-MOCK 명령 전송] /task_command : '{cmd_str}'")
 
     def print_status_json(self):
         """현재 main.py가 수집한 모든 정보(향후 UI로 던져줄 JSON 패킷)를 터미널에 출력"""
         print("\n" + "=" * 65)
-        print(" 📊 [현재 통합 관제 상태 (UI 전송용 JSON 데이터 덤프)]")
+        print(" [현재 통합 관제 상태 (UI 전송용 JSON 데이터 덤프)]")
         print("=" * 65)
         print(json.dumps(self.system_state, indent=2, ensure_ascii=False))
         print("=" * 65 + "\n")
@@ -233,7 +230,7 @@ def main():
         print("[WARN] 웹캠(0번)을 열 수 없습니다. 가상 빈 화면으로 키보드 명령 테스트만 진행합니다.")
 
     print("\n" + "=" * 65)
-    print(" 🚀 [통합 관제 시스템 main.py 가동 시작]")
+    print(" [통합 관제 시스템 main.py 가동 시작]")
     print("  - [Space 바] : 수동 촬영 및 기판 검사 -> DB 저장 -> A*(터틀봇) 자동 호출")
     print("  - [L 키]     : 적재 완료 신호 전송 (LOAD_DONE -> PASS/FAIL 구역 출발)")
     print("  - [U 키]     : 하역 완료 신호 전송 (UNLOAD_DONE -> 대기소 복귀 및 DB 기록)")
