@@ -6,6 +6,7 @@ import threading
 from collections import deque
 from datetime import datetime
 import cv2
+import numpy as np
 
 # ROS 2 (rclpy) 모듈 임포트 (미설치 윈도우 환경에서도 코드 구조 확인이 가능하도록 방어 처리)
 try:
@@ -269,7 +270,6 @@ def main():
                     display_frame = cv2.imread("latest_inspection_result.jpg")
             else:
                 # 카메라가 없을 때도 키 입력을 받기 위한 검은색 더미 화면 생성
-                import numpy as np
                 display_frame = np.zeros((300, 500, 3), dtype=np.uint8)
                 cv2.putText(display_frame, "NO CAMERA (Key Test Mode)", (40, 150),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
