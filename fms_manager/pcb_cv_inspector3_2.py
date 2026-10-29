@@ -13,41 +13,61 @@ except ImportError:
 
 
 class SerialHandler:
-    # MCU(Nucleo/Arduino)와 시리얼 통신을 담당하는 클래스 (연결 실패 시에도 프로그램 유지)
-    def __init__(self, port="/dev/ttyACM0", baudrate=115200, timeout=0.05):
+    def __init__(self, port="/dev/ttyACM0", baudrate=9600, timeout=0.05):
         self.ser = None
         if serial is None:
-            print("[INFO] pyserial 모듈 없음: 시리얼 비활성화 모드")
+            print("[SERIAL] pyserial 미설치: 비활성화 모드")
             return
-        try:
-            self.ser = serial.Serial(port, baudrate, timeout=timeout)
-            print(f"[INFO] 시리얼 연결 성공: {port} ({baudrate}bps)")
-        except Exception as e:
-            print(f"[WARN] 시리얼 연결 실패 ({port}): 단독 테스트 모드로 동작 ({e})")
 
-    def read_command(self):
-        # MCU로부터 수신된 문자열 한 줄 반환 (없거나 에러 시 None)
+        # 지정 포트 우선 시도 후 실패 시 후보 포트 탐색
+        candidate_ports = [port, "/dev/ttyACM0", "/dev/ttyUSB0", "COM7", "COM3"]
+        tried = set()
+
+        for p in candidate_ports:
+            if p in tried:
+                continue
+            tried.add(p)
+            try:
+                self.ser = serial.Serial(p, baudrate, timeout=timeout)
+                time.sleep(2.0)  # Arduino Uno 연결 시 자동 리셋 부팅 대기
+                self.ser.reset_input_buffer()
+                print(f"[SERIAL] 연결 성공: {p} ({baudrate}bps)")
+                return
+            except Exception:
+                continue
+
+        print(f"[SERIAL] 연결 실패 ({port}): 단독 테스트 모드")
+
+    def poll_command(self):
+        # 아두이노 시리얼 버퍼를 읽어 유의미한 명령CAPTURE 반환 및 상태 로그 출력
         if self.ser is None or not self.ser.is_open:
             return None
         try:
-            if self.ser.in_waiting > 0:
-                return self.ser.readline().decode("utf-8", errors="ignore").strip()
+            while self.ser.in_waiting > 0:
+                line = self.ser.readline().decode("utf-8", errors="ignore").strip()
+                if not line:
+                    continue
+                if line == "CAPTURE":
+                    return "CAPTURE"
+                elif line.startswith("["):
+                    print(f"[MCU] {line}")
+                # 'Distance: ...' 출력은 콘솔 도배 방지를 위해 무시
         except Exception as e:
-            print(f"[ERROR] 시리얼 수신 오류: {e}")
+            print(f"[SERIAL] 수신 오류: {e}")
         return None
 
-    def send_command(self, cmd):
-        # MCU로 명령 문자열 전송 (끝에 줄바꿈 자동 추가)
+    def send_result(self, decision: str):
+        """아두이노로 PASS 또는 FAIL 전송"""
+        cmd = "PASS" if decision == "PASS" else "FAIL"
         if self.ser is None or not self.ser.is_open:
-            print(f"[SERIAL-MOCK] 송신 생략 (미연결): {cmd}")
+            print(f"[SERIAL-MOCK] 결과 송신 생략: {cmd}")
             return False
         try:
-            msg = f"{cmd}\n".encode("utf-8")
-            self.ser.write(msg)
-            print(f"[SERIAL-TX] {cmd}")
+            self.ser.write(f"{cmd}\n".encode("ascii"))
+            print(f"[SERIAL] 결과 송신: {cmd}")
             return True
         except Exception as e:
-            print(f"[ERROR] 시리얼 송신 오류 ({cmd}): {e}")
+            print(f"[SERIAL] 송신 오류 ({cmd}): {e}")
             return False
 
     def close(self):
@@ -56,7 +76,13 @@ class SerialHandler:
 
 
 class PCBInspector:
-    def __init__(self, model_path="best.pt", target_w=400, target_h=800, log_dir="logs"):
+    def __init__(self, model_path=None, target_w=400, target_h=800, log_dir=None):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        if model_path is None:
+            model_path = os.path.join(base_dir, "weights", "best.pt")
+        if log_dir is None:
+            log_dir = os.path.join(base_dir, "logs")
+
         self.target_w = target_w  # 원근 보정 후 출력 이미지 가로 크기 (px)
         self.target_h = target_h  # 원근 보정 후 출력 이미지 세로 크기 (px)
         self.log_dir = log_dir    # 결과 이미지 저장 최상위 폴더
@@ -66,11 +92,11 @@ class PCBInspector:
         if os.path.exists(model_path):
             try:
                 self.model = YOLO(model_path)
-                print(f"[INFO] YOLO 모델 로드 완료: {model_path}")
+                print(f"[INIT] YOLO 모델 로드: {model_path}")
             except Exception as e:
-                print(f"[WARN] YOLO 로드 오류 ({e}): 고정 ROI 모드")
+                print(f"[WARN] YOLO 로드 오류 ({e}): 고정 ROI 모드 전환")
         else:
-            print(f"[WARN] '{model_path}' 파일 없음: 고정 ROI 모드")
+            print(f"[WARN] 모델 파일 없음 ({model_path}): 고정 ROI 모드 전환")
 
         # YOLO 클래스 ID와 부품명 매핑
         self.class_map = {
@@ -105,18 +131,14 @@ class PCBInspector:
         return rect
 
     def find_board_corners_auto(self, frame):
-        # 영상에서 밝은 보드 외곽선 4개 코너 좌표를 찾아 반환 (실패 시 None 반환)
         if frame is None:
             return None
 
         h, w = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (7, 7), 0)
-
-        # Otsu 알고리즘으로 보드 배경과 어두운 바닥 분리
         _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        # 모폴로지 닫힘 연산으로 보드 내부 구멍 및 부품 사이 빈틈 메우기
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=3)
 
@@ -125,7 +147,6 @@ class PCBInspector:
             return None
 
         main_c = max(contours, key=cv2.contourArea)
-        # 가장 큰 외곽선 면적이 전체 화면의 10% 미만이면 보드가 없는 것으로 판정
         if cv2.contourArea(main_c) < (w * h * 0.10):
             return None
 
@@ -144,16 +165,16 @@ class PCBInspector:
         # 보드 코너 검출 후 400x800 원근 보정 및 CLAHE 조도 평활화 수행 (실패 시 None 반환)
         pts = self.find_board_corners_auto(frame)
         if pts is None:
-            print("보드 자동 검출 실패")
-            return None
-
-        dst = np.array([
-            [0, 0],
-            [self.target_w - 1, 0],
-            [self.target_w - 1, self.target_h - 1],
-            [0, self.target_h - 1]], dtype="float32")
-        M = cv2.getPerspectiveTransform(pts, dst)
-        warped = cv2.warpPerspective(frame, M, (self.target_w, self.target_h))
+            print("[WARN] 보드 외곽선 검출 실패: 원본 프레임 리사이즈 대체")
+            warped = cv2.resize(frame, (self.target_w, self.target_h))
+        else:
+            dst = np.array([
+                [0, 0],
+                [self.target_w - 1, 0],
+                [self.target_w - 1, self.target_h - 1],
+                [0, self.target_h - 1]], dtype="float32")
+            M = cv2.getPerspectiveTransform(pts, dst)
+            warped = cv2.warpPerspective(frame, M, (self.target_w, self.target_h))
 
         # LAB 색공간 L(명도) 채널에 CLAHE를 적용하여 조명 편차 보정
         lab = cv2.cvtColor(warped, cv2.COLOR_BGR2LAB)
@@ -312,9 +333,8 @@ class PCBInspector:
         cropped_dict, detected_rois, _ = self.detect_and_extract_rois(clean_img)
         defect_summary = {name: [] for name in self.ref_roi_ratios.keys()}
 
-        print("\n" + "=" * 55)
-        print(f" [검사 시작] 검출된 부품 수: {len(cropped_dict)} / {len(self.ref_roi_ratios)}")
-        print("=" * 55)
+        print("-" * 55)
+        print(f"[INSPECT] 부품 검출 수: {len(cropped_dict)} / {len(self.ref_roi_ratios)}")
 
         # ry1: 기준 상단 y, ry2: 기준 하단 y, rx1: 기준 좌측 x, rx2: 기준 우측 x
         for name, (ry1, ry2, rx1, rx2) in ref_rois.items():
@@ -323,7 +343,7 @@ class PCBInspector:
                 cv2.rectangle(result_img, (rx1, ry1), (rx2, ry2), (0, 0, 255), 2)
                 cv2.putText(result_img, f"{name}: MISSING", (rx1, max(15, ry1 - 6)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 2, cv2.LINE_AA)
-                print(f" [FAIL] [{name.upper():<8}] 불량: 부품 누락 (MISSING)")
+                print(f"[FAIL] {name.upper():<8}: MISSING")
                 continue
 
             roi_crop = cropped_dict[name]
@@ -365,7 +385,7 @@ class PCBInspector:
                 esp_status, ratio = self.check_esp01_orientation(roi_crop)
                 if esp_status != "PASS":
                     defect_summary[name].append("REVERSE")
-                    logs.append(f"역삽불량(우측비율 {ratio:.2f})")
+                    logs.append(f"역삽불량({ratio:.2f})")
                 else:
                     logs.append(f"방향정상({ratio:.2f})")
 
@@ -375,7 +395,7 @@ class PCBInspector:
                 cv2.rectangle(result_img, (xmin, ymin), (xmax, ymax), (0, 255, 0), 1)
                 cv2.putText(result_img, f"{name}: PASS", (xmin, max(15, ymin - 5)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 200, 0), 1, cv2.LINE_AA)
-                print(f" [PASS] [{name.upper():<8}] 정상 | {', '.join(logs)}")
+                print(f"[PASS] {name.upper():<8}: {', '.join(logs)}")
             else:
                 if tilt_box is not None:
                     cv2.drawContours(result_img, [tilt_box], 0, (0, 0, 255), 2)
@@ -385,7 +405,7 @@ class PCBInspector:
                 err_str = ",".join(comp_defects)
                 cv2.putText(result_img, f"{name}: {err_str}", (xmin, max(15, ymin - 5)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 255), 1, cv2.LINE_AA)
-                print(f" [FAIL] [{name.upper():<8}] 불량 [{err_str}] | 상세: {', '.join(logs)}")
+                print(f"[FAIL] {name.upper():<8}: {err_str} ({', '.join(logs)})")
 
         total_defects = sum(len(v) for v in defect_summary.values())
         final_decision = "PASS" if total_defects == 0 else "FAIL"
@@ -409,22 +429,15 @@ class PCBInspector:
             "img_path": img_path
         }
 
+        print(f"[RESULT] 최종 판정: {final_decision} (불량 {total_defects}건)")
         print("-" * 55)
-        print(f" >>> [최종 보드 판정]: {final_decision} (총 불량 항목: {total_defects}건)")
-        print(f" >>> [DB 레코드 생성]: {db_record}")
-        print("=" * 55 + "\n")
 
         return result_img, db_record
 
 
 def execute_inspection_sequence(cap, inspector, serial_handler=None, db_manager=None, robot_caller=None, triggered_by_mcu=False):
-    # 조명 점등 -> 노출 대기 -> 촬영 -> 분석 -> DB 저장 -> 로봇 호출 -> MCU 결과 전송 통합 시퀀스
-    # triggered_by_mcu가 False(PC 스페이스바/UI 클릭)일 때만 MCU에 촬영 조명 점등 신호 전송
-    if not triggered_by_mcu and serial_handler is not None:
-        serial_handler.send_command("LED_ON")
-
-    # 조명 점등 후 웹캠 노출 안정화 대기 (0.3초 동안 카메라 버퍼를 비워 최신 밝은 프레임 확보)
-    t_end = time.time() + 0.3
+    # 카메라 버퍼 비우기 및 최신 프레임 확보 (0.2초)
+    t_end = time.time() + 0.2
     latest_frame = None
     while time.time() < t_end:
         ret, f = cap.read()
@@ -433,67 +446,52 @@ def execute_inspection_sequence(cap, inspector, serial_handler=None, db_manager=
         cv2.waitKey(10)
 
     if latest_frame is None:
-        print("[ERROR] 카메라 프레임을 읽을 수 없습니다.")
+        print("[ERROR] 카메라 프레임 읽기 실패")
         if serial_handler is not None:
-            serial_handler.send_command("ERR_NO_BOARD")
+            serial_handler.send_result("FAIL")
         return None, None
 
-    # 1. 보드 검출 및 원근 보정 (검출 실패 시 None 반환 -> 리사이즈 없이 중단)
     warped_board = inspector.warp_and_normalize(latest_frame)
     if warped_board is None:
-        # MCU에 검출 실패 신호 전송 (조명 끄고 재투입 유도)
+        print("[ERROR] 보드 영역 정규화 실패")
         if serial_handler is not None:
-            serial_handler.send_command("ERR_NO_BOARD")
+            serial_handler.send_result("FAIL")
         return None, None
 
-    # 2. 부품 불량 분석 수행
     result_img, db_record = inspector.run_unified_inspection(warped_board)
 
-    # 3. MCU로 판정 결과 전송 (MCU는 조명을 끄고 결과에 맞춰 초록/빨간불 또는 LCD 출력)
+    # 1. 아두이노로 PASS / FAIL 전송 (ST_DETECTING 상태일 때 수신됨)
     if serial_handler is not None:
-        serial_handler.send_command(f"RES_{db_record['final_decision']}")
+        serial_handler.send_result(db_record["final_decision"])
 
-    # 4. 외부 DB 매니저 연동 (객체가 주입된 경우에만 실행, 에러 발생 시에도 죽지 않음)
+    # 2. DB 저장
     if db_manager is not None:
         try:
             db_manager.insert_inspection_result(db_record)
-            print("[INFO] DB 저장 완료")
+            print("[DB] 검사 결과 저장 완료")
         except Exception as e:
-            print(f"[ERROR] DB 저장 실패 (무시하고 계속 진행): {e}")
-    else:
-        print("[DB-MOCK] 연결된 DB 매니저 없음 (콘솔 출력으로 대체)")
+            print(f"[ERROR] DB 저장 실패: {e}")
 
-    # 5. 터틀봇 호출 모듈 연동 (콜백 함수나 객체가 주입된 경우에만 실행)
+    # 3. 로봇 스케줄러 호출
     if robot_caller is not None:
         try:
             robot_caller(db_record)
-            print("[INFO] 터틀봇 호출 요청 완료")
         except Exception as e:
-            print(f"[ERROR] 터틀봇 호출 실패 (무시하고 계속 진행): {e}")
-    else:
-        print("[ROBOT-MOCK] 연결된 로봇 호출기 없음")
+            print(f"[ERROR] 로봇 호출 실패: {e}")
 
     return result_img, db_record
 
 
 def main():
-    inspector = PCBInspector(model_path="best.pt")
-    # 포트 번호는 실제 뉴클레오/아두이노 연결 환경에 맞춰 변경 (미연결 시 자동으로 MOCK 동작)
-    serial_handler = SerialHandler(port="COM3", baudrate=115200)
+    inspector = PCBInspector()
+    serial_handler = SerialHandler(port="/dev/ttyACM0", baudrate=9600)
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("[ERROR] 웹캠을 열 수 없습니다.")
+        print("[ERROR] 웹캠 오픈 실패")
         return
 
-    print("\n" + "=" * 50)
-    print(" [검사 시스템 대기 중]")
-    print("  - MCU 시리얼 수신: 'REQ_CAPTURE' 수신 시 자동 검사")
-    print("  - PC 수동 트리거 : [Space 바] 입력 시 조명 점등 후 검사")
-    print("  - 종료           : [Q 키]")
-    print("=" * 50 + "\n")
-
-    board_ready_from_mcu = False
+    print("[SYSTEM] 단독 검사 대기 시작 (MCU 버튼 또는 Space: 검사 / Q: 종료)")
 
     while True:
         ret, frame = cap.read()
@@ -503,27 +501,17 @@ def main():
         frame = cv2.flip(frame, -1)
         display_frame = frame.copy()
 
-        # 1. MCU 시리얼 신호 비차단(Non-blocking) 확인
-        mcu_cmd = serial_handler.read_command()
-        if mcu_cmd == "BOARD_IN":
-            # MCU가 보드 투입 감지 후 기본 불 1개를 켰음을 알림
-            board_ready_from_mcu = True
-            print("[MCU] 보드 투입 감지됨 (대기 조명 점등 상태)")
-        elif mcu_cmd == "REQ_CAPTURE":
-            # MCU 물리 버튼이 눌려 촬영 조명이 켜졌으므로 즉시 검사 시퀀스 진입
-            print("[MCU] 촬영 버튼 입력 수신: 검사를 시작합니다.")
-            res_img, _ = execute_inspection_sequence(
-                cap, inspector, serial_handler=serial_handler, triggered_by_mcu=True
-            )
+        mcu_cmd = serial_handler.poll_command()
+        if mcu_cmd == "CAPTURE":
+            print("[TRIGGER] 아두이노 촬영 신호 수신: 검사 시작")
+            res_img, _ = execute_inspection_sequence(cap, inspector, serial_handler=serial_handler)
             if res_img is not None:
                 cv2.imshow("Inspection Result", res_img)
-            board_ready_from_mcu = False
 
-        # 2. 화면 가이드라인 표시
         auto_corners = inspector.find_board_corners_auto(frame)
         if auto_corners is not None:
             cv2.polylines(display_frame, [auto_corners.astype(np.int32)], True, (0, 255, 0), 2)
-            detect_txt = "PCB: LOCKED (Ready)"
+            detect_txt = "PCB: LOCKED"
             txt_color = (0, 255, 0)
         else:
             detect_txt = "PCB: NOT DETECTED"
@@ -535,15 +523,12 @@ def main():
 
         cv2.imshow("Live Camera", display_frame)
 
-        # 3. PC 키보드 수동 제어
         key = cv2.waitKey(20) & 0xFF
         if key == ord("q"):
             break
         elif key == ord(" "):
-            print("[PC] 수동 촬영 입력 감지: MCU 조명 점등 요청 및 검사 시작")
-            res_img, _ = execute_inspection_sequence(
-                cap, inspector, serial_handler=serial_handler, triggered_by_mcu=False
-            )
+            print("[TRIGGER] 수동 스페이스바 입력: 검사 시작")
+            res_img, _ = execute_inspection_sequence(cap, inspector, serial_handler=serial_handler)
             if res_img is not None:
                 cv2.imshow("Inspection Result", res_img)
 

@@ -19,7 +19,7 @@ try:
     ROS_AVAILABLE = True
 except ImportError:
     ROS_AVAILABLE = False
-    print("[WARN] rclpy 모듈을 찾을 수 없습니다. ROS 2 통신이 비활성화된 단독 테스트 모드로 실행됩니다.")
+    print("[WARN] rclpy 미설치: ROS 2 비활성화 단독 모드로 실행")
 
 # 작성해 두신 검사대 모듈 임포트 (같은 폴더에 pcb_cv_inspector3_2.py가 있어야 함)
 from pcb_cv_inspector3_2 import PCBInspector, SerialHandler, execute_inspection_sequence
@@ -30,15 +30,14 @@ try:
 except ImportError:
     class DBManager:
         def __init__(self):
-            print("[DB-MOCK] db_manager.py 미감지 -> 터미널 출력 모드로 대체 동작합니다.")
+            print("[DB-MOCK] db_manager 미감지: 콘솔 출력 모드")
 
         def insert_inspection_result(self, db_record: dict):
-            print(f"\n[DB-MOCK INSERT] 검사 결과 DB 저장 요청 수신:")
-            print(f"  -> {json.dumps(db_record, ensure_ascii=False)}")
-            return int(time.time()) % 10000  # 임시 작업 ID 반환
+            print(f"[DB-MOCK] 결과 저장: {json.dumps(db_record, ensure_ascii=False)}")
+            return int(time.time()) % 10000
 
         def update_delivery_complete(self, job_id: int, elapsed_sec: float):
-            print(f"\n[DB-MOCK UPDATE] 작업 #{job_id} 배송 완료 기록! (총 이송 소요시간: {elapsed_sec:.1f}초)")
+            print(f"[DB-MOCK] 작업 #{job_id} 이송 완료 기록: {elapsed_sec:.1f}초")
 
 
 class CentralManager(Node if ROS_AVAILABLE else object):
@@ -69,25 +68,30 @@ class CentralManager(Node if ROS_AVAILABLE else object):
         }
 
         if ROS_AVAILABLE:
-            # 1. [main.py -> A* 노드] 명령 발행 퍼블리셔 (/task_command)
+            # 1. A* 노드 명령 발행
             self.pub_task_cmd = self.create_publisher(String, '/task_command', 10)
 
-            # 2. [A* 노드 -> main.py] 로봇 미션 상태 및 계획된 경로 구독
+            # 2. UI 상태 전송용 퍼블리셔 및 0.5초 타이머
+            self.pub_fms_status = self.create_publisher(String, '/fms/status', 10)
+            self.create_timer(0.5, self.publish_fms_status)
+
+            # 3. A* 및 터틀봇 토픽 구독
             self.create_subscription(String, '/robot_state', self.cb_robot_state, 10)
             self.create_subscription(Path, '/planned_path', self.cb_planned_path, 10)
-
-            # 3. [터틀봇 -> main.py] 위치 좌표, 도착/막힘 보고, 속도, 라이다 전방거리, 배터리 구독
             self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.cb_pose, 10)
             self.create_subscription(String, '/bot_report', self.cb_bot_report, 10)
             self.create_subscription(Twist, '/cmd_vel', self.cb_cmd_vel, 10)
             self.create_subscription(LaserScan, '/scan', self.cb_scan, qos_profile_sensor_data)
             self.create_subscription(BatteryState, '/battery_state', self.cb_battery, 10)
 
-            print("[INFO] ROS 2 중앙 관제 노드(central_fms_manager) 초기화 완료!")
+            print("[INIT] ROS 2 중앙 관제 노드 초기화 완료")
 
-    # =========================================================================
+    def publish_fms_status(self):
+        msg = String()
+        msg.data = json.dumps(self.system_state, ensure_ascii=False)
+        self.pub_fms_status.publish(msg)
+
     # [ROS 2 수신 콜백 함수들] A* 및 터틀봇에서 올라오는 실시간 정보 업데이트
-    # =========================================================================
     def cb_robot_state(self, msg):
         prev_state = self.system_state["robot"]["mission_state"]
         new_state = msg.data
@@ -95,21 +99,20 @@ class CentralManager(Node if ROS_AVAILABLE else object):
 
         # 상태가 바뀔 때만 터미널에 눈에 띄게 로그 출력
         if prev_state != new_state:
-            print(f"\n🔄 [A* 상태 변경] {prev_state} ➔ {new_state}")
+            print(f"[STATE] 로봇 상태 변경: {prev_state} -> {new_state}")
 
             if new_state == "WAIT_LOADING":
-                print("   👉 [안내] 터틀봇이 검사대에 도착했습니다! 물건을 올리고 [L] 키(적재 완료)를 누르세요.")
+                print("[WAIT] 검사대 도착: 적재 후 [L] 키 입력 대기")
             elif new_state == "WAIT_UNLOADING":
-                print("   👉 [안내] 터틀봇이 목적지에 도착했습니다! 물건을 내리고 [U] 키(하역 완료)를 누르세요.")
+                print("[WAIT] 목적지 도착: 하역 후 [U] 키 입력 대기")
             elif prev_state == "WAIT_UNLOADING" and new_state == "RETURNING_HOME":
-                # 하역 완료 후 복귀를 시작하는 순간 -> DB에 배송 완료 및 총 소요 시간 기록!
                 if self.current_job and self.job_start_time:
                     elapsed = time.time() - self.job_start_time
                     self.db_manager.update_delivery_complete(self.current_job.get("job_id", 0), elapsed)
                     self.current_job = None
                     self.job_start_time = None
 
-        # 로봇이 대기소(IDLE_WAIT)에 있고, 대기열(Queue)에 검사 끝난 보드가 있다면 자동 배차!
+        # 로봇이 대기소(IDLE_WAIT)에 있고, 대기열(Queue)에 검사 끝난 보드가 있다면 자동 배차
         if new_state == "IDLE_WAIT" and len(self.job_queue) > 0 and self.current_job is None:
             self.dispatch_next_job()
 
@@ -125,11 +128,11 @@ class CentralManager(Node if ROS_AVAILABLE else object):
 
     def cb_bot_report(self, msg):
         self.system_state["robot"]["last_report"] = msg.data
-        print(f"\n📢 [터틀봇 보고 수신] /bot_report : '{msg.data}'")
+        print(f"[REPORT] 터틀봇 보고 수신: {msg.data}")
 
     def cb_planned_path(self, msg):
         self.system_state["robot"]["waypoint_count"] = len(msg.poses)
-        print(f"\n🗺️ [A* 경로 생성됨] 총 {len(msg.poses)}개의 웨이포인트가 터틀봇으로 전달되었습니다.")
+        print(f"[PATH] A* 경로 생성: {len(msg.poses)} waypoints")
 
     def cb_cmd_vel(self, msg):
         self.system_state["robot"]["speed"] = round(msg.linear.x, 2)
@@ -155,26 +158,20 @@ class CentralManager(Node if ROS_AVAILABLE else object):
     # [검사대 연동 및 스케줄링 함수들]
     # =========================================================================
     def on_inspection_complete(self, db_record: dict):
-        """
-        pcb_cv_inspector3_2.py의 execute_inspection_sequence() 내부에서
-        robot_caller(db_record)로 자동 호출되는 콜백 함수입니다.
-        """
-        print(f" [MAIN] 검사대 판정 결과 수신 완료! (결과: {db_record['final_decision']})")
-        print(f" [MAIN] 저장된 스냅샷 경로: {db_record['img_path']}")
+        print(f"[MAIN] 검사 결과 수신: {db_record['final_decision']} ({db_record['img_path']})")
 
-        # 1. 최신 검사 정보 갱신 및 작업 큐(스케줄러)에 등록
         self.system_state["latest_inspection"] = db_record
         self.job_queue.append(db_record)
         self.system_state["queue_length"] = len(self.job_queue)
 
-        # 2. 로봇이 현재 IDLE_WAIT 상태이고 진행 중인 작업이 없으면 즉시 호출!
+        # 2. 로봇이 현재 IDLE_WAIT 상태이고 진행 중인 작업이 없으면 호출
         if self.system_state["robot"]["mission_state"] == "IDLE_WAIT" and self.current_job is None:
             self.dispatch_next_job()
         else:
-            print(f" [스케줄러] 현재 로봇이 바쁩니다({self.system_state['robot']['mission_state']}). 대기열에 추가됨 (대기: {len(self.job_queue)}건)")
+            print(f"[SCHEDULER] 로봇 작업 중({self.system_state['robot']['mission_state']}): 대기열 등록 (대기 {len(self.job_queue)}건)")
 
     def dispatch_next_job(self):
-        """대기열에서 가장 먼저 검사된 기판을 꺼내 A* 노드로 호출 명령 전송"""
+        # 대기열에서 가장 먼저 검사된 기판을 꺼내 A* 노드로 호출 명령 전송
         if not self.job_queue:
             return
 
@@ -182,93 +179,84 @@ class CentralManager(Node if ROS_AVAILABLE else object):
         self.system_state["queue_length"] = len(self.job_queue)
         self.job_start_time = time.time()
 
-        decision = self.current_job["final_decision"]  # "PASS" 또는 "FAIL"
-        print(f"\n [스케줄러 배차 시작] 판정 결과 '{decision}' 기판 이송을 위해 터틀봇을 검사대로 호출합니다!")
-
+        decision = self.current_job["final_decision"]
+        print(f"[SCHEDULER] 배차 시작: 판정 {decision} 기판 이송 호출")
         self.send_task_command("CALL")
 
     def handle_load_done(self):
         curr_state = self.system_state["robot"]["mission_state"]
-
-        if curr_state == "MOVING_TO_INSPECT":
-            print("\n [적재 대기] 터틀봇이 아직 검사대로 이동 중입니다! 도착(WAIT_LOADING) 후 다시 눌러주세요.")
-            return
-
         if curr_state != "WAIT_LOADING":
-            print(f"\n [명령 무시] 현재 적재를 수행할 수 없는 상태입니다. (현재 상태: {curr_state})")
+            print(f"[WARN] 불가: 현재 상태 {curr_state}")
             return
 
         if self.current_job and "final_decision" in self.current_job:
-            decision = self.current_job["final_decision"]  # "PASS" or "FAIL"
-            cmd = f"LOAD_{decision}"                       # "LOAD_PASS" or "LOAD_FAIL"
-            print(f"\n [적재 완료 확인] 보관된 판정 결과({decision})를 반영하여 '{cmd}' 명령을 전송합니다!")
+            decision = self.current_job["final_decision"]
+            cmd = f"LOAD_{decision}"
+            print(f"[LOAD] 적재 완료: {cmd} 전송")
             self.send_task_command(cmd)
         else:
-            print("\n [주의] 저장된 검사 작업 정보가 없어 기본 'LOAD_DONE'을 전송합니다.")
+            print("[LOAD] 작업 정보 없음: 기본 LOAD_DONE 전송")
             self.send_task_command("LOAD_DONE")
 
     def handle_unload_done(self):
         curr_state = self.system_state["robot"]["mission_state"]
-
-        if curr_state == "MOVING_TO_DEST":
-            print("\n [하역 대기] 터틀봇이 아직 목적지로 이동 중입니다! 도착(WAIT_UNLOADING) 후 다시 눌러주세요.")
-            return
         if curr_state != "WAIT_UNLOADING":
-            print(f"\n [명령 무시] 현재 하역을 수행할 수 없는 상태입니다. (현재 상태: {curr_state})")
+            print(f"[WARN] 하역 완료 무시: 현재 상태 {curr_state}")
             return
 
-        print("\n [하역 완료 확인] 터틀봇을 대기소(HOME)로 복귀시킵니다!")
+        print("[UNLOAD] 하역 완료: 대기소 복귀 명령(UNLOAD_DONE) 전송")
         self.send_task_command("UNLOAD_DONE")
 
     def send_task_command(self, cmd_str: str):
-        """A* 노드의 /task_command 토픽으로 명령 문자열 발행"""
         if ROS_AVAILABLE:
             msg = String()
             msg.data = cmd_str
             self.pub_task_cmd.publish(msg)
-            print(f" [main.py ➔ A* 명령 전송] /task_command : '{cmd_str}'")
+            print(f"[CMD] /task_command 발행: {cmd_str}")
         else:
-            print(f" [ROS-MOCK 명령 전송] /task_command : '{cmd_str}'")
+            print(f"[CMD-MOCK] /task_command: {cmd_str}")
 
     def print_status_json(self):
-        """현재 main.py가 수집한 모든 정보(향후 UI로 던져줄 JSON 패킷)를 터미널에 출력"""
-        print("\n" + "=" * 65)
-        print(" [현재 통합 관제 상태 (UI 전송용 JSON 데이터 덤프)]")
-        print("=" * 65)
+        print("-" * 60)
+        print("[STATUS] 현재 통합 관제 상태 JSON:")
         print(json.dumps(self.system_state, indent=2, ensure_ascii=False))
-        print("=" * 65 + "\n")
+        print("-" * 60)
 
 
 def main():
     if ROS_AVAILABLE:
         rclpy.init()
 
-    # 1. DB 매니저 및 중앙 관제 매니저 생성
+    # DB 매니저 및 중앙 관제 매니저 생성
     db_mgr = DBManager()
     manager = CentralManager(db_manager=db_mgr)
 
-    # 2. ROS 2 수신 루프(spin)를 별도 백그라운드 스레드로 실행 (카메라 루프와 동시에 돌기 위함)
+    # ROS 2 수신 루프(spin)를 별도 백그라운드 스레드로 실행 (카메라 루프와 동시에 돌기 위함)
     if ROS_AVAILABLE:
         ros_thread = threading.Thread(target=rclpy.spin, args=(manager,), daemon=True)
         ros_thread.start()
 
-    # 3. 검사대(PCBInspector) 및 아두이노 시리얼 초기화
-    inspector = PCBInspector(model_path="/weights/best.pt")
-    serial_handler = SerialHandler(port="/dev/ttyACM0", baudrate=115200)
+    # main.py 파일 위치 기준 weights/best.pt 절대 경로 지정
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    weight_path = os.path.join(base_dir, "weights", "best.pt")
+
+    # 검사대(PCBInspector) 및 아두이노 시리얼 초기화
+    inspector = PCBInspector(model_path=weight_path)
+    serial_handler = SerialHandler(port="/dev/ttyACM0", baudrate=9600)
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("[WARN] 웹캠(0번)을 열 수 없습니다. 가상 빈 화면으로 키보드 명령 테스트만 진행합니다.")
+        print("[WARN] 웹캠(0번) 오픈 실패: 키보드 제어 모드로 동작")
 
-    print("\n" + "=" * 65)
-    print(" [통합 관제 시스템 main.py 가동 시작]")
-    print("  - [Space 바] : 수동 촬영 및 기판 검사 -> DB 저장 -> A*(터틀봇) 자동 호출")
-    print("  - [L 키]     : 적재 완료 신호 전송 (LOAD_DONE -> PASS/FAIL 구역 출발)")
-    print("  - [U 키]     : 하역 완료 신호 전송 (UNLOAD_DONE -> 대기소 복귀 및 DB 기록)")
-    print("  - [R 키]     : 비상 정지 / 리셋 신호 전송 (RESET)")
-    print("  - [P 키]     : 현재 수집된 통합 상태(JSON) 터미널에 출력해보기")
-    print("  - [Q 키]     : 프로그램 종료")
-    print("=" * 65 + "\n")
+    print("-" * 65)
+    print("[SYSTEM] 통합 관제 main.py 가동")
+    print("  - [MCU 버튼 / Space] : 기판 촬영 및 검사 -> DB 저장 -> 로봇 호출")
+    print("  - [L 키] : 적재 완료 (LOAD_PASS / LOAD_FAIL)")
+    print("  - [U 키] : 하역 완료 (UNLOAD_DONE)")
+    print("  - [R 키] : 비상 리셋 (RESET)")
+    print("  - [P 키] : 상태 JSON 출력")
+    print("  - [Q 키] : 종료")
+    print("-" * 65)
 
     try:
         while True:
@@ -286,22 +274,26 @@ def main():
                 cv2.putText(display_frame, "NO CAMERA (Key Test Mode)", (40, 150),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
 
-            # 1. 아두이노(MCU) 물리 버튼 입력('REQ_CAPTURE') 비차단 확인
-            mcu_cmd = serial_handler.read_command()
-            if mcu_cmd == "REQ_CAPTURE":
-                print("\n[MCU 트리거] 검사대 촬영 버튼 눌림 감지! 검사를 시작합니다.")
+            # 아두이노 물리 버튼('CAPTURE') 비차단 수신 확인
+            mcu_cmd = serial_handler.poll_command()
+            if mcu_cmd == "CAPTURE":
+                print("[TRIGGER] 아두이노 촬영 신호 수신: 검사 시작")
                 res_img, _ = execute_inspection_sequence(
                     cap, inspector,
                     serial_handler=serial_handler,
                     db_manager=db_mgr,
-                    robot_caller=manager.on_inspection_complete, # ★ 검사 끝나면 자동으로 main 매니저 호출!
-                    triggered_by_mcu=True
+                    robot_caller=manager.on_inspection_complete
                 )
                 if res_img is not None:
                     cv2.imshow("Inspection Result", res_img)
 
-            # 2. 카메라 화면에 현재 로봇 상태 및 키 안내 오버레이 표시
+            # 카메라 화면에 보드 가이드라인 및 로봇 상태 표시
             if display_frame is not None:
+                if cap.isOpened():
+                    auto_corners = inspector.find_board_corners_auto(frame)
+                    if auto_corners is not None:
+                        cv2.polylines(display_frame, [auto_corners.astype(np.int32)], True, (0, 255, 0), 2)
+
                 r_state = manager.system_state["robot"]["mission_state"]
                 rx = manager.system_state["robot"]["x"]
                 ry = manager.system_state["robot"]["y"]
@@ -310,38 +302,33 @@ def main():
                             (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
                 cv2.putText(display_frame, "[SPACE]:Inspect [L]:Load [U]:Unload [P]:Status [R]:Reset",
                             (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
-                cv2.imshow("FMS Main Controller (Cam & Key Input)", display_frame)
+                cv2.imshow("FMS Main Controller", display_frame)
 
-            # 3. 키보드 입력 처리 (웹 UI 버튼 역할을 키보드로 완벽히 시뮬레이션)
+            # 3. 키보드 입력 처리
             key = cv2.waitKey(20) & 0xFF
             if key == ord('q'):
                 break
             elif key == ord(' '):
-                print("\n[수동 트리거] 스페이스바 입력 감지! 검사를 시작합니다.")
+                print("[TRIGGER] 수동 스페이스바 입력: 검사 시작")
                 res_img, _ = execute_inspection_sequence(
                     cap, inspector,
                     serial_handler=serial_handler,
                     db_manager=db_mgr,
-                    robot_caller=manager.on_inspection_complete, # ★ 검사 끝나면 자동으로 main 매니저 호출!
-                    triggered_by_mcu=False
+                    robot_caller=manager.on_inspection_complete
                 )
                 if res_img is not None:
                     cv2.imshow("Inspection Result", res_img)
             elif key == ord('l') or key == ord('L'):
-                # 웹 UI에서 작업자가 [적재 완료] 버튼을 누른 것과 동일
                 manager.handle_load_done()
             elif key == ord('u') or key == ord('U'):
-                # 웹 UI에서 작업자가 [하역 완료] 버튼을 누른 것과 동일
                 manager.handle_unload_done()
             elif key == ord('r') or key == ord('R'):
-                # 웹 UI에서 작업자가 [비상 정지] 버튼을 누른 것과 동일
                 manager.send_task_command("RESET")
             elif key == ord('p') or key == ord('P'):
-                # 현재까지 수집된 A*, 터틀봇, 검사대 정보를 터미널에 한눈에 출력
                 manager.print_status_json()
 
     except KeyboardInterrupt:
-        print("\n[INFO] 사용자에 의해 프로그램이 종료됩니다.")
+        print("[SYSTEM] 사용자 인터럽트 종료")
     finally:
         serial_handler.close()
         if cap.isOpened():
