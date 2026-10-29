@@ -12,6 +12,7 @@ import threading
 
 try:
     import rclpy
+    from rclpy.executors import ExternalShutdownException
     from rclpy.node import Node
     from std_msgs.msg import String
 except ImportError:      # ROS 가 없는 PC
@@ -49,5 +50,13 @@ def start(handlers):
     os.environ.setdefault("ROS_DOMAIN_ID", DOMAIN_ID)   # rclpy.init() 전에 정해야 적용된다
     rclpy.init()
     node = Bridge(handlers)
-    threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()
+    threading.Thread(target=_spin, args=(node,), daemon=True).start()
     return node
+
+
+def _spin(node):
+    # 서버를 끌 때(Ctrl+C) rclpy 가 먼저 닫히면 spin 이 예외를 던진다. 끄는 중이라 조용히 끝낸다.
+    try:
+        rclpy.spin(node)
+    except (ExternalShutdownException, KeyboardInterrupt):
+        pass
