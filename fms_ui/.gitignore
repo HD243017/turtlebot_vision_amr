@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.backup/
+# 검사 사진은 계속 쌓이므로 제외하고, 시안용 샘플만 남긴다
+snapshots/*
+!snapshots/sample_*
