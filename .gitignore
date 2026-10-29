@@ -28,7 +28,6 @@ fms_manager/logs/*
 latest_inspection_result.jpg
 
 # 대용량 YOLO 가중치 파일 제외 (깃허브 용량 초과 방지)
-*.pt
 *.onnx
 *.engine
 
