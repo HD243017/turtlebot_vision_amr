@@ -14,10 +14,10 @@ except ImportError:
 
 class SerialHandler:
     # MCU(Nucleo/Arduino)와 시리얼 통신을 담당하는 클래스 (연결 실패 시에도 프로그램 유지)
-    def __init__(self, port="COM3", baudrate=115200, timeout=0.05):
+    def __init__(self, port="/dev/ttyACM0", baudrate=115200, timeout=0.05):
         self.ser = None
         if serial is None:
-            print("[INFO] pyserial 모듈 없음: 시리얼 비활성화 모드로 동작")
+            print("[INFO] pyserial 모듈 없음: 시리얼 비활성화 모드")
             return
         try:
             self.ser = serial.Serial(port, baudrate, timeout=timeout)
@@ -68,9 +68,9 @@ class PCBInspector:
                 self.model = YOLO(model_path)
                 print(f"[INFO] YOLO 모델 로드 완료: {model_path}")
             except Exception as e:
-                print(f"[WARN] YOLO 로드 오류 ({e}): 고정 ROI 모드로 동작")
+                print(f"[WARN] YOLO 로드 오류 ({e}): 고정 ROI 모드")
         else:
-            print(f"[WARN] '{model_path}' 파일 없음: 고정 ROI 모드로 동작")
+            print(f"[WARN] '{model_path}' 파일 없음: 고정 ROI 모드")
 
         # YOLO 클래스 ID와 부품명 매핑
         self.class_map = {

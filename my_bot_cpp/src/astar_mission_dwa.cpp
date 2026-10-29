@@ -42,8 +42,8 @@ class PcMissionPlanner : public rclcpp::Node {
 public:
     PcMissionPlanner() : Node("astar_mission_dwa") {
         // 코스트맵 파라미터
-        inflate_radius_  = this->declare_parameter<double>("inflate_radius", 8.0);    // 부풀리기 전체 반경(칸)
-        hard_radius_     = this->declare_parameter<double>("hard_radius", 4.0);       // 100(절대 금지) 반경(칸)
+        inflate_radius_  = this->declare_parameter<double>("inflate_radius", 9.0);    // 부풀리기 전체 반경(칸)
+        hard_radius_     = this->declare_parameter<double>("hard_radius", 4.5);       // 100(절대 금지) 반경(칸)
         dyn_hard_radius_ = this->declare_parameter<double>("dyn_hard_radius", 4.5);   // 가벽 점 하나의 100 반경(칸)
         dyn_soft_radius_ = this->declare_parameter<double>("dyn_soft_radius", 7.0);   // 가벽 점 하나의 80 반경(칸)
         start_clear_     = static_cast<int>(this->declare_parameter<int64_t>("start_clear_cells", 6));
@@ -115,7 +115,7 @@ private:
     std::pair<double, double> current_goal_ = {0.0, 0.0};
 
     // 코스트맵 파라미터
-    double inflate_radius_ = 8.0, hard_radius_ = 4.0;
+    double inflate_radius_ = 9.0, hard_radius_ = 4.5;
     double dyn_hard_radius_ = 4.5, dyn_soft_radius_ = 7.0;
     int start_clear_ = 6, goal_clear_ = 3;
     bool simplify_path_ = false;

@@ -185,9 +185,40 @@ class CentralManager(Node if ROS_AVAILABLE else object):
         decision = self.current_job["final_decision"]  # "PASS" 또는 "FAIL"
         print(f"\n [스케줄러 배차 시작] 판정 결과 '{decision}' 기판 이송을 위해 터틀봇을 검사대로 호출합니다!")
 
-        # ros2_astar_dwa.cpp의 commandCallback 규격에 맞춰 판정 결과와 CALL 명령 전송
-        self.send_task_command(decision)
         self.send_task_command("CALL")
+
+    def handle_load_done(self):
+        curr_state = self.system_state["robot"]["mission_state"]
+
+        if curr_state == "MOVING_TO_INSPECT":
+            print("\n [적재 대기] 터틀봇이 아직 검사대로 이동 중입니다! 도착(WAIT_LOADING) 후 다시 눌러주세요.")
+            return
+
+        if curr_state != "WAIT_LOADING":
+            print(f"\n [명령 무시] 현재 적재를 수행할 수 없는 상태입니다. (현재 상태: {curr_state})")
+            return
+
+        if self.current_job and "final_decision" in self.current_job:
+            decision = self.current_job["final_decision"]  # "PASS" or "FAIL"
+            cmd = f"LOAD_{decision}"                       # "LOAD_PASS" or "LOAD_FAIL"
+            print(f"\n [적재 완료 확인] 보관된 판정 결과({decision})를 반영하여 '{cmd}' 명령을 전송합니다!")
+            self.send_task_command(cmd)
+        else:
+            print("\n [주의] 저장된 검사 작업 정보가 없어 기본 'LOAD_DONE'을 전송합니다.")
+            self.send_task_command("LOAD_DONE")
+
+    def handle_unload_done(self):
+        curr_state = self.system_state["robot"]["mission_state"]
+
+        if curr_state == "MOVING_TO_DEST":
+            print("\n [하역 대기] 터틀봇이 아직 목적지로 이동 중입니다! 도착(WAIT_UNLOADING) 후 다시 눌러주세요.")
+            return
+        if curr_state != "WAIT_UNLOADING":
+            print(f"\n [명령 무시] 현재 하역을 수행할 수 없는 상태입니다. (현재 상태: {curr_state})")
+            return
+
+        print("\n [하역 완료 확인] 터틀봇을 대기소(HOME)로 복귀시킵니다!")
+        self.send_task_command("UNLOAD_DONE")
 
     def send_task_command(self, cmd_str: str):
         """A* 노드의 /task_command 토픽으로 명령 문자열 발행"""
@@ -222,8 +253,8 @@ def main():
         ros_thread.start()
 
     # 3. 검사대(PCBInspector) 및 아두이노 시리얼 초기화
-    inspector = PCBInspector(model_path="best.pt")
-    serial_handler = SerialHandler(port="COM3", baudrate=115200)
+    inspector = PCBInspector(model_path="/weights/best.pt")
+    serial_handler = SerialHandler(port="/dev/ttyACM0", baudrate=115200)
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -298,10 +329,10 @@ def main():
                     cv2.imshow("Inspection Result", res_img)
             elif key == ord('l') or key == ord('L'):
                 # 웹 UI에서 작업자가 [적재 완료] 버튼을 누른 것과 동일
-                manager.send_task_command("LOAD_DONE")
+                manager.handle_load_done()
             elif key == ord('u') or key == ord('U'):
                 # 웹 UI에서 작업자가 [하역 완료] 버튼을 누른 것과 동일
-                manager.send_task_command("UNLOAD_DONE")
+                manager.handle_unload_done()
             elif key == ord('r') or key == ord('R'):
                 # 웹 UI에서 작업자가 [비상 정지] 버튼을 누른 것과 동일
                 manager.send_task_command("RESET")
