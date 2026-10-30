@@ -1,0 +1,49 @@
+# 구역 · 마커 · 목표 좌표 (단위: m, rad) — 지도 maps/map_test1.yaml 용
+#
+# goal 좌표 (2026-10-30): 팀원 주행 노드 waypoints_ 값 (HOME · INSPECT · PASS · FAIL).
+#   yaw 는 주행 노드에 없어 0.0 으로 둠 (화면은 x · y 만 씀).
+#   구역 사각형(rect)은 goal 을 가운데로 0.7 × 0.6 m 로 잡은 화면 표시용 (실제 구역 크기 아님).
+#   (지도 범위: 방 안쪽 대략 x -0.4 ~ 3.8 m, y -0.4 ~ 2.3 m. 왼쪽 위에 사각 장애물, 오른쪽에 칸막이 두 개)
+#
+# 좌표는 지도(map) 기준.
+#   marker     아루코 마커 번호 (화면에는 "마커 N")
+#   kind       wait | station | ok | ng | plan  (색 구분)
+#   rect       구역 사각형 [x_min, y_min, x_max, y_max]
+#   marker_at  마커 위치 [x, y],  marker_side: 붙어 있는 벽 (top | bottom | left | right)  — 모르면 생략
+#   goal       목표 자세 [x, y, yaw]
+
+zones:
+  - marker: 0
+    name: 대기
+    sub: 주차 · 복귀 위치
+    kind: wait
+    rect: [-0.315, -0.320, 0.385, 0.280]
+    goal: [0.035, -0.020, 0.0]       # HOME
+
+  - marker: 1
+    name: 검사대
+    sub: 적재 위치
+    kind: station
+    rect: [2.150, -0.230, 2.850, 0.370]
+    goal: [2.500, 0.070, 0.0]        # INSPECT
+
+  - marker: 2
+    name: 양품
+    kind: ok
+    rect: [2.850, 1.700, 3.550, 2.300]
+    goal: [3.200, 2.000, 0.0]        # PASS
+
+  - marker: 3
+    name: 불량
+    kind: ng
+    rect: [-0.450, 1.500, 0.250, 2.100]
+    goal: [-0.100, 1.800, 0.0]       # FAIL
+
+# 지도 위에 이름만 덧붙일 것 (맵핑 지도에는 이름이 없으므로)
+labels:
+  - text: 장애물
+    at: [0.60, 1.40]
+
+# 시안용 가짜 경로: 검사대 → 불량 구역 (사각 장애물 아래쪽으로 돌아 왼쪽 위로 올라감).
+# 실제 로봇과 연결하면 쓰지 않는다.
+demo_plan: [[2.50, 0.07], [2.50, 0.70], [-0.10, 0.70], [-0.10, 1.80]]
