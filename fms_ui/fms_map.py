@@ -60,5 +60,4 @@ def load_zones(path):
     return {
         "zones": cfg.get("zones") or [],
         "labels": cfg.get("labels") or [],
-        "demo_plan": cfg.get("demo_plan") or [],   # 시안용 가짜 경로 (실제 연동 때는 안 씀)
     }

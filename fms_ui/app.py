@@ -36,7 +36,7 @@ try:
     ZONES = fms_map.load_zones(ZONES_YAML)
 except Exception as e:
     print(f" * [!] 구역 파일을 읽을 수 없습니다: {e}")
-    ZONES = {"zones": [], "labels": [], "demo_plan": []}
+    ZONES = {"zones": [], "labels": []}
 print(f" * 지도: {MAP_YAML.relative_to(BASE) if MAP_YAML.is_relative_to(BASE) else MAP_YAML}"
       f"{'' if MAP_META else ' (없음)'} · 구역: {ZONES_YAML.name}")
 
@@ -74,19 +74,18 @@ MISSIONS = {
     "RETURNING_HOME": "복귀 중",
 }
 
+# normal 배지는 /fms/status 를 받으면 MISSIONS 한글로 바뀐다. lost 의 "마지막 상태"는 화면이 채운다.
 STATES = {
-    "normal": {"tone": "run", "badge": "이송 중", "code": ""},
+    "normal": {"tone": "run", "badge": "—", "code": ""},
     "safety": {
         "tone": "warn", "badge": "안전 정지", "code": "",
         "banner": ["보행자 감지 · 안전 정지",
                    "경고음 출력 중 · 사람이 경로에서 벗어나면 자동으로 이어서 주행합니다"],
-        "timerFrom": 8,
     },
     "lost": {
-        "tone": "crit", "badge": "통신 끊김", "code": "마지막 상태: 이송 중",
+        "tone": "crit", "badge": "통신 끊김", "code": "",
         "banner": ["로봇 통신 끊김",
                    "로봇 전원과 와이파이 연결을 확인하세요 · 검사는 계속 진행됩니다"],
-        "timerFrom": 12,
     },
 }
 
@@ -112,15 +111,35 @@ BATT_LOW_PCT = 25
 
 robot = {"state": "normal", "since": time.time(), "last_seen": None, "battery": None, "fms": None}
 
-# 지금 수행 중인 작업. plan 은 계획 경로(지도 좌표 m) — 실제로는 Nav2 /plan 또는
-# /robot/status 로 받아야 하는데 설계 지침에 아직 없음(확정 필요).
-# 시안에서는 화면이 이 경로를 따라 로봇을 움직이고, 실제 연동 때는 로봇 x · y · yaw 를 받는다.
-# 시안용 경로는 지도마다 달라서 구역 파일의 demo_plan 에 둔다.
-job = {
-    "id": 40,
-    "dest_marker": 3,
-    "plan": ZONES["demo_plan"],
-}
+# 지금 수행 중인 작업: 작업 번호 · 목적지 마커(0 대기 / 1 검사대 / 2 양품 / 3 불량) · 계획 경로(지도 좌표 m 의 [[x, y], ...]).
+# 작업 번호 · 목적지는 update_fms() 가 /fms/status 로 채운다. 계획 경로는 main.py 가 안 보내므로 비워 둔다 (화면에 경로 선 없음).
+job = {"id": None, "dest_marker": None, "plan": []}
+
+# mission_state → 목적지 마커. 이송 단계는 기판 판정으로 정한다 (PASS 2 양품 / FAIL 3 불량)
+MISSION_DEST = {"MOVING_TO_INSPECT": 1, "WAIT_LOADING": 1, "RETURNING_HOME": 0}
+MISSION_TO_BOARD_DEST = ("MOVING_TO_DEST", "WAIT_UNLOADING")
+
+
+def current_board(data):
+    """지금 싣고 가는 기판의 (작업 번호, 판정). main.py 가 current_job 을 보내면 그 값,
+    아니면 대기열이 비었을 때만 가장 최근 검사(latest_inspection) = 지금 기판으로 본다. 모르면 (None, None)."""
+    cj = data.get("current_job")
+    if not isinstance(cj, dict):
+        latest = data.get("latest_inspection")
+        cj = latest if data.get("queue_length") == 0 and isinstance(latest, dict) else {}
+    jid = cj.get("job_id")
+    return (jid if isinstance(jid, int) and not isinstance(jid, bool) else None), cj.get("final_decision")
+
+
+def job_from_fms(mission, data):
+    """/fms/status → 화면 job 의 작업 번호 · 목적지. 대기 중이면 둘 다 None."""
+    if mission in MISSION_DEST:
+        dest = MISSION_DEST[mission]
+    elif mission in MISSION_TO_BOARD_DEST:
+        dest = {"PASS": 2, "FAIL": 3}.get(current_board(data)[1])
+    else:
+        return None, None
+    return current_board(data)[0], dest
 
 
 def battery_percent(percentage=None, voltage=None):
@@ -161,8 +180,10 @@ def update_fms(data):
         "speed": num("speed"), "front_dist": num("front_dist"),
         "queue": data.get("queue_length"),
     }
+    jid, dest = job_from_fms(fms["mission"], data)
     with _lock:
         robot["fms"] = fms
+        job["id"], job["dest_marker"] = jid, dest
     update_robot(num("battery"))
 
 
