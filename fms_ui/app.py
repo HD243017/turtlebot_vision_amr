@@ -92,8 +92,6 @@ STATES = {
 KINDS = {
     "insp": ["검사", "k-insp"],
     "deliv": ["주행", "k-deliv"],
-    "safety": ["안전", "k-safety"],
-    "comm": ["통신", "k-comm"],
 }
 
 # ---- 검사 · 이송 · 이벤트 기록 저장소 ---------------------------------------
@@ -277,7 +275,7 @@ def api_robot():
 
 @app.get("/api/events")
 def api_events():
-    """이벤트 기록 (최신 순 최대 50건). date=YYYY-MM-DD (비우면 전체), kind=all|insp|deliv|safety|comm"""
+    """이벤트 기록 (최신 순 최대 50건). date=YYYY-MM-DD (비우면 전체), kind=all|insp|deliv"""
     try:
         day = date.fromisoformat(request.args["date"]) if request.args.get("date") else None
     except ValueError:

@@ -254,8 +254,6 @@ td.tm { font-family: var(--font-mono); white-space: nowrap; color: var(--muted);
 .kind { font-size: .82em; font-weight: 600; padding: 1px 7px; border-radius: 3px; white-space: nowrap; }
 .k-insp { color: var(--accent); background: var(--accent-soft); }
 .k-deliv { color: var(--fg); background: var(--surface-2); border: 1px solid var(--line); }
-.k-safety { color: var(--warn); background: var(--warn-soft); }
-.k-comm { color: var(--crit); background: var(--crit-soft); }
 .win footer { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--line); font-size: .8em; color: var(--muted); flex-wrap: wrap; }
 .win footer .spacer { flex: 1; }
 
