@@ -26,20 +26,27 @@ except ImportError:
 from pcb_cv_inspector3_2 import PCBInspector, SerialHandler, execute_inspection_sequence
 
 # DB매니저 임포트 시도 (UI/DB 담당자가 아직 안 만들었어도 자동으로 Mock 클래스로 대체!)
+class MockDBManager:
+    def __init__(self):
+        print("[DB-MOCK] 실제 DB 연결 실패로 콘솔 출력(Mock) 모드로 동작합니다.")
+
+    def insert_inspection_result(self, db_record: dict):
+        print(f"[DB-MOCK] 결과 저장: {json.dumps(db_record, ensure_ascii=False)}")
+        return int(time.time()) % 10000
+
+    def update_delivery_complete(self, job_id: int, elapsed_sec: float):
+        print(f"[DB-MOCK] 작업 #{job_id} 이송 완료 기록: {elapsed_sec:.1f}초")
+
+# 실제 DBManager를 가져오되, 접속 시도 중 에러(권한/연결 등)가 나면 Mock으로 안전하게 전환
 try:
     from db_manager import DBManager
-except ImportError:
-    class DBManager:
-        def __init__(self):
-            print("[DB-MOCK] db_manager 미감지: 콘솔 출력 모드")
-
-        def insert_inspection_result(self, db_record: dict):
-            print(f"[DB-MOCK] 결과 저장: {json.dumps(db_record, ensure_ascii=False)}")
-            return int(time.time()) % 10000
-
-        def update_delivery_complete(self, job_id: int, elapsed_sec: float):
-            print(f"[DB-MOCK] 작업 #{job_id} 이송 완료 기록: {elapsed_sec:.1f}초")
-
+    # 객체를 미리 생성해 보고 에러가 나는지 테스트
+    _test_db = DBManager()
+    del _test_db
+    print("[DB] 실제 MySQL 데이터베이스 연결 성공")
+except Exception as e:
+    print(f"[WARN] 실제 DB 연결 실패 ({e}) -> 안전하게 MockDBManager로 대체합니다.")
+    DBManager = MockDBManager
 
 class CentralManager(Node if ROS_AVAILABLE else object):
     def __init__(self, db_manager):
@@ -259,6 +266,9 @@ def main():
     print("  - [Q 키] : 종료")
     print("-" * 65)
 
+    frame_count = 0
+    cached_corners = None
+
     try:
         while True:
             if cap.isOpened():
@@ -289,10 +299,14 @@ def main():
 
             # 카메라 화면에 보드 가이드라인 및 로봇 상태 표시
             if display_frame is not None:
-                if cap.isOpened():
-                    auto_corners = inspector.find_board_corners_auto(frame)
-                    if auto_corners is not None:
-                        cv2.polylines(display_frame, [auto_corners.astype(np.int32)], True, (0, 255, 0), 2)
+                if cap.isOpened() and ret:
+                    frame_count += 1
+                    # 5프레임에 1번만 외곽선 검출 연산 수행 (ROS 2 스레드 CPU 확보)
+                    if frame_count % 5 == 0:
+                        cached_corners = inspector.find_board_corners_auto(frame)
+                    
+                    if cached_corners is not None:
+                        cv2.polylines(display_frame, [cached_corners.astype(np.int32)], True, (0, 255, 0), 2)
 
                 r_state = manager.system_state["robot"]["mission_state"]
                 rx = manager.system_state["robot"]["x"]
