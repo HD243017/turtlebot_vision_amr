@@ -67,8 +67,8 @@ class CentralManager(Node if ROS_AVAILABLE else object):
                 "y": 0.0,                     # 지도에 표시할 로봇 Y 좌표 (m)
                 "yaw_deg": 0.0,               # 로봇 바라보는 각도 (도)
                 "speed": 0.0,                 # 현재 선속도 (m/s)
-                "battery": 100.0,             # 배터리 잔량 (%)
-                "front_dist": 99.9,           # 전방 가장 가까운 물체 거리 (m)
+                "battery": None,             # 배터리 잔량 (%)
+                "front_dist": None,           # 전방 가장 가까운 물체 거리 (m)
                 "waypoint_count": 0           # 현재 할당된 A* 경로의 웨이포인트 개수
             },
             "latest_inspection": None,        # 가장 최근 검사대 판정 결과 (db_record)
@@ -352,6 +352,12 @@ def main():
             manager.destroy_node()
             rclpy.shutdown()
 
+        print("[SYSTEM] 모든 관제 프로세스 종료...")
+        os.system("fuser -k 5000/tcp 8080/tcp 2>/dev/null")
+        os.system("pkill -9 -f 'flask --app app' 2>/dev/null")
+        os.system("pkill -9 -f 'web_video_server' 2>/dev/null")
+        os.system("pkill -9 -f 'astar_mission_dwa' 2>/dev/null")
+        os.system("pkill -9 -f 'rviz2' 2>/dev/null")
 
 if __name__ == "__main__":
     main()

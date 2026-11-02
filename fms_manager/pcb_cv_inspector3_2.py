@@ -102,9 +102,9 @@ class PCBInspector:
 
         self.ref_roi_ratios = {
             "esp01":   (0.035, 0.230, 0.220, 0.680),
-            "switch":  (0.295, 0.470, 0.240, 0.520),
-            "ic_chip": (0.300, 0.555, 0.580, 0.820),
-            "fnd":     (0.520, 0.970, 0.130, 0.550),
+            "switch":  (0.245, 0.420, 0.240, 0.520),
+            "ic_chip": (0.250, 0.505, 0.580, 0.820),
+            "fnd":     (0.470, 0.920, 0.130, 0.550),
         }
 
         self.angle_targets = ["ic_chip", "fnd"]
@@ -123,7 +123,6 @@ class PCBInspector:
         return rect
 
     def find_board_corners_auto(self, frame):
-        # [복구 완료] 검은 테이프 경계를 정확히 잡던 원래 알고리즘
         if frame is None:
             return None
 

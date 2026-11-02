@@ -10,11 +10,33 @@ echo " 프로젝트 경로: $WORKSPACE_DIR"
 echo " ROS 워크스페이스: $ROS_WS_DIR"
 echo "=========================================================="
 
+clean_all_fms() {
+    # 1. 포트 점유 프로세스 정리 (5000: Flask, 8080: web_video_server)
+    fuser -k 5000/tcp 2>/dev/null
+    fuser -k 8080/tcp 2>/dev/null
+
+    # 2. 우리 프로젝트 관련 프로세스만 정밀 타격 (시스템 python3 보호)
+    pkill -9 -f "flask --app app" 2>/dev/null
+    pkill -9 -f "web_video_server" 2>/dev/null
+    pkill -9 -f "astar_mission_dwa" 2>/dev/null
+    pkill -9 -f "rviz2" 2>/dev/null
+    pkill -9 -f "amcl" 2>/dev/null
+    pkill -9 -f "map_server" 2>/dev/null
+    pkill -9 -f "lifecycle_manager" 2>/dev/null
+}
+
+echo "[0/4] 기존 실행 중인 관제 및 스트리밍 프로세스 정리 중..."
+pkill -9 -f "fms_manager/main.py" 2>/dev/null
+clean_all_fms
+sleep 1
+
 # 무한 루프 방지 처리된 안전 종료 함수
 cleanup() {
     trap - SIGINT SIGTERM EXIT
-    echo -e "\n[종료] 백그라운드 관제 프로세스를 정리합니다..."
+    echo -e "\n[종료] 모든 관제 서버, 영상 서버, RViz 및 네비게이션 노드를 일괄 종료..."
+    clean_all_fms
     kill 0 2>/dev/null
+    echo "[종료 완료]"
 }
 trap cleanup SIGINT SIGTERM EXIT
 
@@ -31,8 +53,6 @@ echo " -> 적용된 ROS_DOMAIN_ID: $ROS_DOMAIN_ID | FMS_ROS: $FMS_ROS"
 # 2. 터틀봇 카메라 스트리밍용 web_video_server 백그라운드 실행
 echo "[1/4] 터틀봇 영상 스트리밍 서버(web_video_server) 가동..."
 ros2 run web_video_server web_video_server > "$WORKSPACE_DIR/video_server.log" 2>&1 &
-
-fuser -k 5000/tcp 2>/dev/null
 
 # 3. Flask UI 웹서버 백그라운드 실행 (FMS_ROS=1 필수 전달!)
 echo "[2/4] Flask 웹 UI 서버 백그라운드 가동..."

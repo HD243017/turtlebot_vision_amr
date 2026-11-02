@@ -65,15 +65,8 @@
             <circle class="goal" r="9"/>
             <circle class="goal" r="3" style="fill:var(--accent)"/>
           </g>
-          <g class="only-safety">
-            <path class="fov" id="fov" d=""/>
-            <g id="person">
-              <circle class="person-c" cx="0" cy="-12" r="7"/>
-              <path class="person-c" d="M-9 14 Q-9 -2 0 -2 Q9 -2 9 14 Z"/>
-              <text class="person-t" x="14" y="-14">사람 · 0.42 m 앞</text>
-            </g>
-          </g>
-          <g id="robot">
+          <!-- 로봇은 /fms/status 로 위치를 받기 전에는 숨긴다 (app.js showFms) -->
+          <g id="robot" style="display:none">
             <g class="robot-live">
               <circle class="robot-ring pulse" r="40"/>
               <circle class="safety-ring only-safety pulse" r="40"/>
@@ -84,18 +77,17 @@
             </g>
             <g id="robotTagG">
               <rect class="tagbg" x="-38" y="-62" width="76" height="20" rx="3"/>
-              <text class="robot-tag" id="robotTag" x="0" y="-48" text-anchor="middle">작업 #40</text>
+              <text class="robot-tag" id="robotTag" x="0" y="-48" text-anchor="middle"></text>
             </g>
-            <text class="lost-t only-lost" id="robotLostT" x="0" y="54" text-anchor="middle">마지막 위치 · <tspan id="lostAgeMap">12</tspan>초 전</text>
+            <text class="lost-t only-lost" id="robotLostT" x="0" y="54" text-anchor="middle">마지막 위치 · <tspan id="lostAgeMap">0</tspan>초 전</text>
           </g>
           <g id="scaleBar"></g>
           <text class="map-missing" id="mapMissing" x="320" y="220" text-anchor="middle" hidden>지도 파일 없음 · maps/ 의 지도 yaml 을 확인해 주세요</text>
         </svg>
       </div>
       <div class="readout">
-        <div><span class="k">목적지</span><span class="v" id="rgoal">3 불량 구역</span></div>
-        <div><span class="k">남은 거리</span><span class="v mono" id="rleft">1.9 m</span></div>
-        <div><span class="k">위치 인식</span><span class="v" id="ramcl">정상</span></div>
+        <div><span class="k">목적지</span><span class="v" id="rgoal">—</span></div>
+        <div><span class="k">남은 거리</span><span class="v mono" id="rleft">—</span></div>
       </div>
     </section>
 
@@ -110,13 +102,13 @@
       </div>
       <dl class="sensors" id="sensors">
         <dt>상태</dt>
-        <dd><span class="badge" id="badge"><span class="dot"></span><span id="badgeText">이송 중</span></span><span class="code" id="stateCode"></span></dd>
+        <dd><span class="badge" id="badge"><span class="dot"></span><span id="badgeText">—</span></span><span class="code" id="stateCode"></span></dd>
         <dt>통신</dt>
         <dd><span class="lamp idle" id="lamp"></span><span class="v" id="commText">수신 없음</span><span class="mono muted" id="ping"></span></dd>
         <dt>배터리</dt>
         <dd class="battdd"><span class="batt"><span id="battFill" style="width:0%"></span></span><span class="v mono" id="battPct">-</span></dd>
         <dt>속도</dt>
-        <dd><span class="v mono" id="spd">0.15 m/s</span></dd>
+        <dd><span class="v mono" id="spd">—</span></dd>
       </dl>
     </section>
 
