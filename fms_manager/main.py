@@ -25,7 +25,6 @@ except ImportError:
 # 작성해 두신 검사대 모듈 임포트 (같은 폴더에 pcb_cv_inspector3_2.py가 있어야 함)
 from pcb_cv_inspector3_2 import PCBInspector, SerialHandler, execute_inspection_sequence
 
-# DB매니저 임포트 시도 (UI/DB 담당자가 아직 안 만들었어도 자동으로 Mock 클래스로 대체!)
 class MockDBManager:
     def __init__(self):
         print("[DB-MOCK] 실제 DB 연결 실패로 콘솔 출력(Mock) 모드로 동작합니다.")
@@ -58,26 +57,35 @@ class CentralManager(Node if ROS_AVAILABLE else object):
         self.current_job = None    # 현재 로봇이 이송 중인 작업 정보
         self.job_start_time = None # 이송 소요 시간 측정용 타이머
 
+        self.waiting_for_init_dock = False
+        self.INIT_X = 0.600
+        self.INIT_Y = 0.450
+        self.INIT_OZ = 0.000
+        self.INIT_OW = 1.000
+
         # 웹 UI로 초당 1~2회 JSON 포장해서 던져줄 통합 상태 데이터 딕셔너리
         self.system_state = {
             "robot": {
-                "mission_state": "IDLE_WAIT", # A* 노드가 알려주는 미션 상태
-                "last_report": "NONE",        # 터틀봇이 보고한 신호 (ARRIVED, BLOCKED 등)
-                "x": 0.0,                     # 지도에 표시할 로봇 X 좌표 (m)
-                "y": 0.0,                     # 지도에 표시할 로봇 Y 좌표 (m)
-                "yaw_deg": 0.0,               # 로봇 바라보는 각도 (도)
-                "speed": 0.0,                 # 현재 선속도 (m/s)
-                "battery": None,             # 배터리 잔량 (%)
-                "front_dist": None,           # 전방 가장 가까운 물체 거리 (m)
-                "waypoint_count": 0           # 현재 할당된 A* 경로의 웨이포인트 개수
+                "mission_state": "IDLE_WAIT",
+                "last_report": "NONE",
+                "x": 0.0,
+                "y": 0.0,
+                "yaw_deg": 0.0,
+                "speed": 0.0,
+                "battery": None,
+                "front_dist": None,
+                "waypoint_count": 0,
+                "path": []
             },
-            "latest_inspection": None,        # 가장 최근 검사대 판정 결과 (db_record)
-            "queue_length": 0                 # 대기 중인 물량 수
+            "latest_inspection": None,
+            "queue_length": 0
         }
 
         if ROS_AVAILABLE:
             # 1. A* 노드 명령 발행
             self.pub_task_cmd = self.create_publisher(String, '/task_command', 10)
+            self.pub_dock_cmd = self.create_publisher(String, '/dock_command', 10)
+            self.pub_init_pose = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
 
             # 2. UI 상태 전송용 퍼블리셔 및 0.5초 타이머
             self.pub_fms_status = self.create_publisher(String, '/fms/status', 10)
@@ -88,6 +96,7 @@ class CentralManager(Node if ROS_AVAILABLE else object):
             self.create_subscription(Path, '/planned_path', self.cb_planned_path, 10)
             self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.cb_pose, 10)
             self.create_subscription(String, '/bot_report', self.cb_bot_report, 10)
+            self.create_subscription(String, '/dock_status', self.cb_dock_status, 10)
             self.create_subscription(Twist, '/cmd_vel', self.cb_cmd_vel, 10)
             self.create_subscription(LaserScan, '/scan', self.cb_scan, qos_profile_sensor_data)
             self.create_subscription(BatteryState, '/battery_state', self.cb_battery, 10)
@@ -108,6 +117,10 @@ class CentralManager(Node if ROS_AVAILABLE else object):
         # 상태가 바뀔 때만 터미널에 눈에 띄게 로그 출력
         if prev_state != new_state:
             print(f"[STATE] 로봇 상태 변경: {prev_state} -> {new_state}")
+
+            if new_state in ("IDLE_WAIT", "WAIT_LOADING", "WAIT_UNLOADING"):
+                self.system_state["robot"]["path"] = []
+                self.system_state["robot"]["waypoint_count"] = 0
 
             if new_state == "WAIT_LOADING":
                 print("[WAIT] 검사대 도착: 적재 후 [L] 키 입력 대기")
@@ -135,11 +148,82 @@ class CentralManager(Node if ROS_AVAILABLE else object):
         self.system_state["robot"]["yaw_deg"] = round(math.degrees(yaw), 1)
 
     def cb_bot_report(self, msg):
-        self.system_state["robot"]["last_report"] = msg.data
-        print(f"[REPORT] 터틀봇 보고 수신: {msg.data}")
+        report_str = msg.data.strip()
+        self.system_state["robot"]["last_report"] = report_str
+        print(f"[REPORT] 터틀봇 보고 수신: {report_str}")
+
+        # [핵심 추가] 터틀봇 물리 버튼 신호 처리
+        if report_str == "BTN_LOAD_DONE":
+            print("[BUTTON-AUTO] 터틀봇 적재 완료 버튼 인식 -> 출발 명령 전송!")
+            self.handle_load_done()
+        elif report_str == "BTN_UNLOAD_DONE":
+            print("[BUTTON-AUTO] 터틀봇 하역 완료 버튼 인식 -> 복귀 명령 전송!")
+            self.handle_unload_done()
+        elif report_str == "BTN_ESTOP":
+            print("[BUTTON-ESTOP] 터틀봇 비상정지 버튼 인식 -> 도킹 중단 및 A* RESET 전송!")
+            self.waiting_for_init_dock = False
+            if ROS_AVAILABLE:
+                stop_dock = String()
+                stop_dock.data = "STOP"
+                self.pub_dock_cmd.publish(stop_dock)
+            self.send_task_command("RESET")
+
+    def cb_dock_status(self, msg):
+        status = msg.data.strip()
+        print(f"[DOCK] 도킹 상태 수신: {status}")
+
+        if self.waiting_for_init_dock:
+            if status == "DOCKED":
+                self.waiting_for_init_dock = False
+                print("[INIT-ALIGN] 마커 ID 0 정렬 완료. AMCL 초기 위치 설정")
+                self.inject_initial_pose()
+            elif status.startswith("DOCK_FAIL") or status.startswith("DOCK_ABORT"):
+                self.waiting_for_init_dock = False
+                print(f"[INIT-ALIGN] 초기 정렬 실패 또는 중단됨: {status}")
+
+    def trigger_initial_alignment(self):
+        if not ROS_AVAILABLE:
+            print("[INIT-ALIGN-MOCK] ROS 비활성화 상태")
+            return
+        print("[INIT-ALIGN] ArUco 마커(ID 0) 기반 자동 정렬")
+        self.waiting_for_init_dock = True
+        msg = String()
+        msg.data = "START:0"
+        self.pub_dock_cmd.publish(msg)
+
+    def inject_initial_pose(self):
+        if not ROS_AVAILABLE:
+            return
+        pose = PoseWithCovarianceStamped()
+        pose.header.frame_id = 'map'
+        pose.pose.pose.position.x = float(self.INIT_X)
+        pose.pose.pose.position.y = float(self.INIT_Y)
+        pose.pose.pose.position.z = 0.0
+        pose.pose.pose.orientation.x = 0.0
+        pose.pose.pose.orientation.y = 0.0
+        pose.pose.pose.orientation.z = float(self.INIT_OZ)
+        pose.pose.pose.orientation.w = float(self.INIT_OW)
+
+        cov = [0.0] * 36
+        cov[0] = 0.01
+        cov[7] = 0.01
+        cov[35] = 0.01
+        pose.pose.covariance = cov
+
+        for _ in range(3):
+            pose.header.stamp = self.get_clock().now().to_msg()
+            self.pub_init_pose.publish(pose)
+            time.sleep(0.1)
+
+        print(f"[INIT-ALIGN] 완료: X={self.INIT_X}, Y={self.INIT_Y}")
 
     def cb_planned_path(self, msg):
         self.system_state["robot"]["waypoint_count"] = len(msg.poses)
+        # [추가] 각 PoseStamped에서 (x, y) 좌표를 소수점 3자리로 추출하여 리스트로 저장
+        self.system_state["robot"]["path"] = [
+            [round(p.pose.position.x, 3), round(p.pose.position.y, 3)]
+            for p in msg.poses
+        ]
         print(f"[PATH] A* 경로 생성: {len(msg.poses)} waypoints")
 
     def cb_cmd_vel(self, msg):
@@ -203,8 +287,9 @@ class CentralManager(Node if ROS_AVAILABLE else object):
             print(f"[LOAD] 적재 완료: {cmd} 전송")
             self.send_task_command(cmd)
         else:
-            print("[LOAD] 작업 정보 없음: 기본 LOAD_DONE 전송")
-            self.send_task_command("LOAD_DONE")
+            # 수동으로 CALL만 보내서 current_job이 없을 때도 기본 PASS지로 갈 수 있도록 안전장치 마련
+            print("[LOAD] 작업 정보 없음: 기본 LOAD_PASS 전송")
+            self.send_task_command("LOAD_PASS")
 
     def handle_unload_done(self):
         curr_state = self.system_state["robot"]["mission_state"]
@@ -258,10 +343,11 @@ def main():
 
     print("-" * 65)
     print("[SYSTEM] 통합 관제 main.py 가동")
+    print("  - [I 키] : ArUco 마커(ID 0) 자동 정렬 및 초기 위치 세팅")
     print("  - [MCU 버튼 / Space] : 기판 촬영 및 검사 -> DB 저장 -> 로봇 호출")
-    print("  - [L 키] : 적재 완료 (LOAD_PASS / LOAD_FAIL)")
-    print("  - [U 키] : 하역 완료 (UNLOAD_DONE)")
-    print("  - [R 키] : 비상 리셋 (RESET)")
+    print("  - [L 키 / 로봇 버튼] : 적재 완료 (LOAD_PASS / LOAD_FAIL)")
+    print("  - [U 키 / 로봇 버튼] : 하역 완료 (UNLOAD_DONE)")
+    print("  - [R 키 / 로봇 E-STOP] : 비상 리셋 (RESET)")
     print("  - [P 키] : 상태 JSON 출력")
     print("  - [Q 키] : 종료")
     print("-" * 65)
@@ -279,12 +365,10 @@ def main():
                 else:
                     display_frame = cv2.imread("latest_inspection_result.jpg")
             else:
-                # 카메라가 없을 때도 키 입력을 받기 위한 검은색 더미 화면 생성
                 display_frame = np.zeros((300, 500, 3), dtype=np.uint8)
                 cv2.putText(display_frame, "NO CAMERA (Key Test Mode)", (40, 150),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
 
-            # 아두이노 물리 버튼('CAPTURE') 비차단 수신 확인
             mcu_cmd = serial_handler.poll_command()
             if mcu_cmd == "CAPTURE":
                 print("[TRIGGER] 아두이노 촬영 신호 수신: 검사 시작")
@@ -297,11 +381,9 @@ def main():
                 if res_img is not None:
                     cv2.imshow("Inspection Result", res_img)
 
-            # 카메라 화면에 보드 가이드라인 및 로봇 상태 표시
             if display_frame is not None:
                 if cap.isOpened() and ret:
                     frame_count += 1
-                    # 5프레임에 1번만 외곽선 검출 연산 수행 (ROS 2 스레드 CPU 확보)
                     if frame_count % 5 == 0:
                         cached_corners = inspector.find_board_corners_auto(frame)
                     
@@ -314,14 +396,16 @@ def main():
                 cv2.rectangle(display_frame, (0, 0), (display_frame.shape[1], 65), (25, 25, 25), -1)
                 cv2.putText(display_frame, f"BOT: {r_state} | Pos:({rx:.2f}, {ry:.2f})",
                             (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
-                cv2.putText(display_frame, "[SPACE]:Inspect [L]:Load [U]:Unload [P]:Status [R]:Reset",
-                            (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+                cv2.putText(display_frame, "[I]:InitAlign [SPACE]:Inspect [L]:Load [U]:Unload [R]:Reset",
+                            (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1)
                 cv2.imshow("FMS Main Controller", display_frame)
 
             # 3. 키보드 입력 처리
             key = cv2.waitKey(20) & 0xFF
-            if key == ord('q'):
+            if key == ord('q') or key == ord('Q'):
                 break
+            elif key == ord('i') or key == ord('I'):
+                manager.trigger_initial_alignment()
             elif key == ord(' '):
                 print("[TRIGGER] 수동 스페이스바 입력: 검사 시작")
                 res_img, _ = execute_inspection_sequence(

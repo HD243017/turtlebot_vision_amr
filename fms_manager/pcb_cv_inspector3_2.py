@@ -102,14 +102,14 @@ class PCBInspector:
 
         self.ref_roi_ratios = {
             "esp01":   (0.035, 0.230, 0.220, 0.680),
-            "switch":  (0.245, 0.420, 0.240, 0.520),
+            "switch":  (0.257, 0.422, 0.223, 0.493),
             "ic_chip": (0.250, 0.505, 0.580, 0.820),
-            "fnd":     (0.470, 0.920, 0.130, 0.550),
+            "fnd":     (0.450, 0.910, 0.120, 0.530),
         }
 
         self.angle_targets = ["ic_chip", "fnd"]
         self.ANGLE_TOLERANCE = 3.0
-        self.OFFSET_TOLERANCE_PX = 12.0
+        self.OFFSET_TOLERANCE_PX = 15.0
         self.BBOX_PAD = 8
 
     def order_points(self, pts):

@@ -68,7 +68,7 @@ public:
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
         // 1. 주요 거점 좌표 설정
-        waypoints_["HOME"]    = {0.035, -0.020};
+        waypoints_["HOME"]    = {0.600, 0.450};
         waypoints_["INSPECT"] = {2.500, 0.070};
         waypoints_["PASS"]    = {3.200, 2.000};
         waypoints_["FAIL"]    = {-0.100, 1.800};
