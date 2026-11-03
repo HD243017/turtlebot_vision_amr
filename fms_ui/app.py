@@ -92,8 +92,6 @@ STATES = {
 KINDS = {
     "insp": ["검사", "k-insp"],
     "deliv": ["주행", "k-deliv"],
-    "safety": ["안전", "k-safety"],
-    "comm": ["통신", "k-comm"],
 }
 
 # ---- 검사 · 이송 · 이벤트 기록 저장소 ---------------------------------------
@@ -112,7 +110,7 @@ BATT_LOW_PCT = 25
 robot = {"state": "normal", "since": time.time(), "last_seen": None, "battery": None, "fms": None}
 
 # 지금 수행 중인 작업: 작업 번호 · 목적지 마커(0 대기 / 1 검사대 / 2 양품 / 3 불량) · 계획 경로(지도 좌표 m 의 [[x, y], ...]).
-# 작업 번호 · 목적지는 update_fms() 가 /fms/status 로 채운다. 계획 경로는 main.py 가 안 보내므로 비워 둔다 (화면에 경로 선 없음).
+# 셋 다 update_fms() 가 /fms/status 로 채운다. 계획 경로는 main.py 의 robot.path (A* /planned_path), 비면 화면에 경로 선 없음.
 job = {"id": None, "dest_marker": None, "plan": []}
 
 # mission_state → 목적지 마커. 이송 단계는 기판 판정으로 정한다 (PASS 2 양품 / FAIL 3 불량)
@@ -140,6 +138,15 @@ def job_from_fms(mission, data):
     else:
         return None, None
     return current_board(data)[0], dest
+
+
+def plan_from_fms(path):
+    """main.py robot.path ([[x, y], ...] 지도 좌표 m) → 화면 계획 경로. 숫자 두 개가 아닌 점은 버린다."""
+    if not isinstance(path, list):
+        return []
+    ok = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and v == v
+    return [[float(p[0]), float(p[1])] for p in path
+            if isinstance(p, (list, tuple)) and len(p) >= 2 and ok(p[0]) and ok(p[1])]
 
 
 def battery_percent(percentage=None, voltage=None):
@@ -181,9 +188,10 @@ def update_fms(data):
         "queue": data.get("queue_length"),
     }
     jid, dest = job_from_fms(fms["mission"], data)
+    plan = plan_from_fms(r.get("path"))
     with _lock:
         robot["fms"] = fms
-        job["id"], job["dest_marker"] = jid, dest
+        job["id"], job["dest_marker"], job["plan"] = jid, dest, plan
     update_robot(num("battery"))
 
 

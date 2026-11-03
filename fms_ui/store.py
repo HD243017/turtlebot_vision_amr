@@ -22,9 +22,6 @@ TYPE_KO = {"MISSING": "누락", "OFFSET": "위치 이탈", "TILT": "기울어짐
 DEST_TEXT = {2: "2 양품 구역", 3: "3 불량 구역"}
 DEST_BY_RESULT = {"PASS": 2, "FAIL": 3}
 
-# 이벤트 종류 → 이벤트 기록 창의 분류 (app.KINDS)
-EVENT_KIND = {"OBSTACLE_STOP": "safety", "REROUTE": "safety", "ESTOP": "safety", "COMM_LOST": "comm"}
-
 # 시안용 샘플 사진 (snapshots/). 메모리 모드 예시 검사가 이 사진을 가리킨다.
 SAMPLE_IMAGE = "sample_board.jpg"
 
@@ -115,11 +112,7 @@ def format_avg(sec):
     return f"{sec // 60}:{sec % 60:02d}"
 
 
-# ---- 이벤트 기록 창: 세 테이블을 시간순으로 합친다 --------------------------------
-def _secs(a, b):
-    return int(round((b - a).total_seconds()))
-
-
+# ---- 이벤트 기록 창: 검사 · 주행 두 테이블을 시간순으로 합친다 ---------------------
 def _inspection_line(r):
     labels = [t for p in PARTS for t in status_defects(p, r[f"{p}_status"])]
     text = f"검사 {insp_no(r['inspection_id'])} {r['result']}"
@@ -138,32 +131,13 @@ def _delivery_lines(d):
     ]
 
 
-def _event_line(e):
-    job = f" · 작업 #{e['delivery_id']}" if e["delivery_id"] else ""
-    after = _secs(e["occurred_at"], e["resumed_at"]) if e["resumed_at"] else None
-    t = e["event_type"]
-    if t == "OBSTACLE_STOP":
-        return f"장애물 감지 · 일시 정지{job}" + (f" · {after}초 뒤 재출발" if after is not None else " · 정지 중")
-    if t == "REROUTE":
-        return f"장애물 감지 · 경로 재탐색{job}" + (f" · {after}초 뒤 재출발" if after is not None else "")
-    if t == "COMM_LOST":
-        return f"로봇 통신 끊김{job}" + (f" · {after}초 뒤 복구" if after is not None else " · 복구 전")
-    if t == "ESTOP":
-        return f"비상 정지 (관제 콘솔){job}" + (f" · {after}초 뒤 해제" if after is not None else " · 정지 중")
-    return t
-
-
-def timeline(inspections, deliveries, events, day, kind="all", limit=50):
-    """이벤트 기록 창의 줄 목록 (최신 순). kind: all | insp | deliv | safety | comm"""
+def timeline(inspections, deliveries, day, kind="all", limit=50):
+    """이벤트 기록 창의 줄 목록 (최신 순). kind: all | insp | deliv"""
     rows = []
     if kind in ("all", "insp"):
         rows += [(r["inspected_at"], "insp", _inspection_line(r)) for r in inspections]
     if kind in ("all", "deliv"):
         rows += [(at, "deliv", text) for d in deliveries for at, text in _delivery_lines(d)]
-    for e in events:
-        k = EVENT_KIND.get(e["event_type"], "safety")
-        if kind in ("all", k):
-            rows.append((e["occurred_at"], k, _event_line(e)))
     rows = [r for r in rows if r[0] is not None and (day is None or r[0].date() == day)]
     # 같은 초에 생긴 줄은 나중에 넣은 것(큰 번호)이 위로 오게 순번도 같이 비교한다
     order = sorted(range(len(rows)), key=lambda i: (rows[i][0], i), reverse=True)
@@ -220,20 +194,6 @@ class MemoryStore:
                                     "departed_at": at(departed), "return_started_at": at(returned),
                                     "total_sec": total}
 
-        self.events = []
-        for did, etype, ms, x, y, resumed in [
-            (36, "REROUTE", "03:25", 1.300, 0.720, "03:29"),
-            (38, "COMM_LOST", "08:45", None, None, "08:47"),
-            (40, "OBSTACLE_STOP", "13:07", 1.050, 0.720, "13:09"),
-        ]:
-            self._add_event(did, etype, at(ms), x, y, at(resumed))
-
-    def _add_event(self, delivery_id, event_type, occurred_at, x=None, y=None, resumed_at=None):
-        self.events.append({"event_id": len(self.events) + 1,
-                            "delivery_id": delivery_id if delivery_id in self.deliveries else None,
-                            "event_type": event_type, "occurred_at": occurred_at, "x": x, "y": y,
-                            "resumed_at": resumed_at})
-
     def _delivery_of(self, iid):
         for d in self.deliveries.values():
             if d["inspection_id"] == iid:
@@ -270,7 +230,7 @@ class MemoryStore:
     def events_on(self, day, kind="all", limit=50):
         with self._lock:
             return timeline(list(self.inspections.values()), list(self.deliveries.values()),
-                            list(self.events), day, kind, limit)
+                            day, kind, limit)
 
 
 # =============================================================================
@@ -341,18 +301,15 @@ class MySQLStore:
             lo, hi = datetime.combine(day, dtime()), datetime.combine(day, dtime()) + timedelta(days=1)
             where_i, args_i = "WHERE inspected_at >= %s AND inspected_at < %s", [lo, hi]
             where_d, args_d = "WHERE called_at >= %s AND called_at < %s", [lo - timedelta(days=1), hi]
-            where_e, args_e = "WHERE occurred_at >= %s AND occurred_at < %s", [lo, hi]
         else:
-            where_i = where_d = where_e = ""
-            args_i, args_d, args_e = [], [], []
+            where_i = where_d = ""
+            args_i, args_d = [], []
         with self._conn() as conn, conn.cursor() as cur:
             cur.execute(f"SELECT * FROM inspection {where_i} ORDER BY inspected_at DESC LIMIT %s", args_i + [limit])
             insps = cur.fetchall()
             cur.execute(f"SELECT * FROM delivery {where_d} ORDER BY called_at DESC LIMIT %s", args_d + [limit])
             delivs = cur.fetchall()
-            cur.execute(f"SELECT * FROM event {where_e} ORDER BY occurred_at DESC LIMIT %s", args_e + [limit])
-            events = cur.fetchall()
-        return timeline(insps, delivs, events, day, kind, limit)
+        return timeline(insps, delivs, day, kind, limit)
 
 
 def open_store():
