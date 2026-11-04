@@ -80,7 +80,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .banner .timer { font-size: 1.1em; font-weight: 600; color: var(--tone); }
 
 /* 본문 3열 */
-.main { display: grid; grid-template-columns: minmax(0,1fr) 410px 370px; gap: 10px; }
+/* 지도가 세로(app.js PORTRAIT)라서 1열은 좁게, 남는 폭은 로봇 · 실시간 칸(카메라)에 준다 */
+.main { display: grid; grid-template-columns: minmax(0,1fr) minmax(410px,1fr) 370px; gap: 10px; }
 
 /* 지도 */
 .legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: .7em; color: var(--muted); }
@@ -235,7 +236,7 @@ td.tm { font-family: var(--font-mono); white-space: nowrap; color: var(--muted);
 @media (max-width: 1199px) {
   .main { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
   .mappanel { grid-column: 1 / span 2; }
-  .mapwrap svg { min-height: 0; height: auto; aspect-ratio: 3/2; }
+  .mapwrap svg { min-height: 0; height: auto; aspect-ratio: 4/5; max-height: 80vh; }
   .snap { flex: none; aspect-ratio: 3/4; }
 }
 @media (max-width: 720px) {
