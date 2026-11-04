@@ -58,10 +58,10 @@ class CentralManager(Node if ROS_AVAILABLE else object):
         self.job_start_time = None # 이송 소요 시간 측정용 타이머
 
         self.waiting_for_init_dock = False
-        self.INIT_X = 0.600
-        self.INIT_Y = 0.450
-        self.INIT_OZ = 0.000
-        self.INIT_OW = 1.000
+        self.INIT_X = 0.7640
+        self.INIT_Y = 0.1501
+        self.INIT_OZ = -0.7196
+        self.INIT_OW = 0.6943
 
         # 웹 UI로 초당 1~2회 JSON 포장해서 던져줄 통합 상태 데이터 딕셔너리
         self.system_state = {
@@ -89,7 +89,7 @@ class CentralManager(Node if ROS_AVAILABLE else object):
 
             # 2. UI 상태 전송용 퍼블리셔 및 0.5초 타이머
             self.pub_fms_status = self.create_publisher(String, '/fms/status', 10)
-            self.create_timer(0.5, self.publish_fms_status)
+            self.create_timer(0.2, self.publish_fms_status)
 
             # 3. A* 및 터틀봇 토픽 구독
             self.create_subscription(String, '/robot_state', self.cb_robot_state, 10)
@@ -177,9 +177,14 @@ class CentralManager(Node if ROS_AVAILABLE else object):
                 self.waiting_for_init_dock = False
                 print("[INIT-ALIGN] 마커 ID 0 정렬 완료. AMCL 초기 위치 설정")
                 self.inject_initial_pose()
+
+                print("[INIT-ALIGN] 초기 정렬 시퀀스 완료 -> A* 노드 활성화(RESET) 전송")
+                self.send_task_command("RESET")
+
             elif status.startswith("DOCK_FAIL") or status.startswith("DOCK_ABORT"):
                 self.waiting_for_init_dock = False
                 print(f"[INIT-ALIGN] 초기 정렬 실패 또는 중단됨: {status}")
+                self.send_task_command("RESET")
 
     def trigger_initial_alignment(self):
         if not ROS_AVAILABLE:
@@ -199,10 +204,18 @@ class CentralManager(Node if ROS_AVAILABLE else object):
         pose.pose.pose.position.x = float(self.INIT_X)
         pose.pose.pose.position.y = float(self.INIT_Y)
         pose.pose.pose.position.z = 0.0
+
+        oz = float(self.INIT_OZ)
+        ow = float(self.INIT_OW)
+        norm = math.hypot(oz, ow)
+        if norm < 1e-6:
+            oz, ow = 0.0, 1.0
+            norm = 1.0
+
         pose.pose.pose.orientation.x = 0.0
         pose.pose.pose.orientation.y = 0.0
-        pose.pose.pose.orientation.z = float(self.INIT_OZ)
-        pose.pose.pose.orientation.w = float(self.INIT_OW)
+        pose.pose.pose.orientation.z = oz / norm
+        pose.pose.pose.orientation.w = ow / norm
 
         cov = [0.0] * 36
         cov[0] = 0.01
@@ -210,10 +223,8 @@ class CentralManager(Node if ROS_AVAILABLE else object):
         cov[35] = 0.01
         pose.pose.covariance = cov
 
-        for _ in range(3):
-            pose.header.stamp = self.get_clock().now().to_msg()
-            self.pub_init_pose.publish(pose)
-            time.sleep(0.1)
+        pose.header.stamp = self.get_clock().now().to_msg()
+        self.pub_init_pose.publish(pose)
 
         print(f"[INIT-ALIGN] 완료: X={self.INIT_X}, Y={self.INIT_Y}")
 

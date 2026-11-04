@@ -104,11 +104,11 @@ class PCBInspector:
             "esp01":   (0.035, 0.230, 0.220, 0.680),
             "switch":  (0.257, 0.422, 0.223, 0.493),
             "ic_chip": (0.250, 0.505, 0.580, 0.820),
-            "fnd":     (0.450, 0.910, 0.120, 0.530),
+            "fnd":     (0.450, 0.920, 0.120, 0.540),
         }
 
         self.angle_targets = ["ic_chip", "fnd"]
-        self.ANGLE_TOLERANCE = 3.0
+        self.ANGLE_TOLERANCE = 5.0
         self.OFFSET_TOLERANCE_PX = 15.0
         self.BBOX_PAD = 8
 
@@ -236,6 +236,7 @@ class PCBInspector:
 
         M = cv2.moments(solid_blob, binaryImage=True)
         tilt_angle = -0.5 * np.degrees(np.arctan2(2.0 * M["mu11"], M["mu02"] - M["mu20"]))
+        print(f"[DEBUG] raw tilt angle: {tilt_angle}")
         rect = cv2.minAreaRect(hull)
         box = np.intp(cv2.boxPoints(rect))
 
