@@ -14,15 +14,8 @@
 
 <div class="app tone-run" id="app" data-state="normal">
 
-  <div class="preview" role="region" aria-label="시안 미리보기 컨트롤">
-    <b>시안 미리보기</b><span>실제 관제 화면에는 없는 줄입니다</span>
-    <span class="spacer"></span>
-    <button type="button" class="toggle" id="projToggle" aria-pressed="false">발표 모드 (프로젝터 고대비)</button>
-  </div>
-
   <header class="top">
     <h1>기판 검사·이송 관제</h1>
-    <span class="today">오늘 <b class="mono" id="todayTotal">{{ today.total }}건</b> · <b class="okc mono" id="todayOk">PASS {{ today.pass_rate }}%</b> · 평균 이송 <b class="mono" id="todayAvg">{{ today.avg }}</b></span>
     <span class="spacer"></span>
     <button type="button" class="btn-line" id="openEvents">이벤트 기록</button>
     <!-- 화면은 보기 전용. 비상 정지는 main.py 창(R 키)에서 한다 (UI 가 로봇 토픽을 직접 보내지 않기로 함) -->

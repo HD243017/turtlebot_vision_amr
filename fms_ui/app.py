@@ -227,7 +227,6 @@ def snapshot():
         "robot": robot_link(),
         "inspection": insp,
         "recent": STORE.recent(6),
-        "today": STORE.today_summary(),
     })
     return live
 
@@ -238,8 +237,7 @@ def index():
     status = snapshot()
     boot = {"states": STATES, "missions": MISSIONS, "kinds": KINDS, "status": status,
             "map": MAP_META, "zones": ZONES}
-    return render_template("index.html", kinds=KINDS, today=status["today"],
-                           today_date=date.today().isoformat(), boot=boot)
+    return render_template("index.html", kinds=KINDS, today_date=date.today().isoformat(), boot=boot)
 
 
 @app.get("/map/image.png")
@@ -285,7 +283,7 @@ def api_robot():
 
 @app.get("/api/events")
 def api_events():
-    """이벤트 기록 (최신 순 최대 50건). date=YYYY-MM-DD (비우면 전체), kind=all|insp|deliv|safety|comm"""
+    """이벤트 기록 (최신 순 최대 50건). date=YYYY-MM-DD (비우면 전체), kind=all|insp|deliv"""
     try:
         day = date.fromisoformat(request.args["date"]) if request.args.get("date") else None
     except ValueError:

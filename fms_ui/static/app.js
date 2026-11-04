@@ -144,7 +144,7 @@
     done.push([x, y]);
     attrs($('routeDone'), { points: plan.length ? pts(done) : '' });
     attrs($('route'), { points: plan.length ? pts(rest) : '' });
-    // 남은 거리: 계획 경로가 있으면 경로를 따라, 없으면 목적지 goal 까지 직선 거리 (main.py 가 경로를 안 보내므로 지금은 직선)
+    // 남은 거리: 계획 경로(main.py robot.path)가 있으면 경로를 따라, 없으면 목적지 goal 까지 직선 거리
     if (state !== 'lost') $('rleft').textContent = plan.length ? (planLen - d).toFixed(1) + ' m'
       : (goalXY ? Math.hypot(goalXY[0] - x, goalXY[1] - y).toFixed(1) + ' m · 직선' : '—');
   }
@@ -279,9 +279,6 @@
     applyJob(s.job);
 
     if (inspKey(s.inspection) !== lastInspKey) showInspection(s.inspection, s.recent);
-    $('todayTotal').textContent = s.today.total + '건';
-    $('todayOk').textContent = 'PASS ' + s.today.pass_rate + '%';
-    $('todayAvg').textContent = s.today.avg;
 
     if (changed) render(); else { tick(); showFms(); }
   }
@@ -307,12 +304,6 @@
   $('eventsModal').addEventListener('click', function (e) { if (e.target === this) closeEv(); });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('eventsModal').hidden) closeEv(); });
   $('evQuery').addEventListener('click', queryEvents);
-
-  $('projToggle').addEventListener('click', function () {
-    var on = !document.body.classList.contains('proj');
-    document.body.classList.toggle('proj', on);
-    this.setAttribute('aria-pressed', String(on));
-  });
 
   // 전방 카메라 (web_video_server MJPEG). 영상이 실제로 들어올 때만 화면에 보이고,
   // 끊기면 "영상 신호 없음"을 띄운 채 5초마다 다시 연결한다.
