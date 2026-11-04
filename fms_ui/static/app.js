@@ -25,11 +25,19 @@
   // ---- 지도 (maps/map_test1.yaml 또는 FMS_MAP + config/zones.yaml) ----
   // 서버가 주는 좌표는 모두 지도 기준 미터(위쪽이 +y). toSvg 로 화면 좌표로 바꾼다.
   // 지도 크기와 상관없이 화면 폭을 640으로 맞춰서, 글자 · 아이콘 크기는 일정하게 둔다.
+  // PORTRAIT: 지도를 시계 방향 90도 돌려 세로로 그린다 (지도의 +x 가 화면 아래, +y 가 화면 오른쪽).
+  //   로봇 좌표 · zones.yaml 은 그대로이고 화면에 그릴 때만 돌린다. false 면 원래 가로 지도.
+  var PORTRAIT = true;
   var MAP = BOOT.map, ZONES = BOOT.zones || { zones: [], labels: [] };
   var MW = MAP ? MAP.width_m : 3.2, MH = MAP ? MAP.height_m : 2.2;
   var OX = MAP ? MAP.origin[0] : -0.1, OY = MAP ? MAP.origin[1] : -0.1;
-  var VIEW_W = 640, S = VIEW_W / MW, VIEW_H = MH * S;   // S: 1 m 당 화면 단위
-  function toSvg(x, y) { return [(x - OX) * S, (MH - (y - OY)) * S]; }
+  var VIEW_W = 640, S = VIEW_W / (PORTRAIT ? MH : MW), VIEW_H = (PORTRAIT ? MW : MH) * S;   // S: 1 m 당 화면 단위
+  function toSvg(x, y) { return PORTRAIT ? [(y - OY) * S, (x - OX) * S] : [(x - OX) * S, (MH - (y - OY)) * S]; }
+  // 지도 사각형 [x1, y1, x2, y2] (m) → 화면 {x, y, w, h}. 돌려도 왼쪽 위 모서리가 맞게 나온다
+  function svgRect(x1, y1, x2, y2) {
+    var a = toSvg(x1, y1), b = toSvg(x2, y2);
+    return { x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), w: Math.abs(b[0] - a[0]), h: Math.abs(b[1] - a[1]) };
+  }
   function f1(n) { return n.toFixed(1); }
   function attrs(el, a) { for (var k in a) el.setAttribute(k, a[k]); }
   function zoneByMarker(m) { return ZONES.zones.filter(function (z) { return z.marker === m; })[0]; }
@@ -38,19 +46,25 @@
     var full = { x: 0, y: 0, width: VIEW_W, height: f1(VIEW_H) };
     attrs($('mapSvg'), { viewBox: '0 0 ' + VIEW_W + ' ' + f1(VIEW_H) });
     attrs($('mapBg'), full); attrs($('mapOcc'), full); attrs($('mapMask'), full);
-    if (MAP) attrs($('mapMaskImg'), Object.assign({ href: '/map/image.png' }, full));
+    // 지도 그림은 가로 그대로 놓고, 세로 모드면 그림째 시계 방향 90도 돌린다 (toSvg 와 같은 회전)
+    if (MAP) attrs($('mapMaskImg'), Object.assign({ href: '/map/image.png' },
+      PORTRAIT ? { x: 0, y: 0, width: f1(MW * S), height: f1(MH * S), transform: 'matrix(0 1 -1 0 ' + f1(MH * S) + ' 0)' } : full));
     else { $('mapOcc').remove(); $('mapMissing').hidden = false; attrs($('mapMissing'), { x: VIEW_W / 2, y: f1(VIEW_H / 2) }); }
 
     // 격자: 작은 지도는 10 cm(굵은 선 50 cm), 중간은 50 cm(1 m), 큰 지도는 1 m(5 m)
     var g = MW <= 5 ? { step: 0.1, major: 0.5 } : (MW <= 15 ? { step: 0.5, major: 1 } : { step: 1, major: 5 });
     var step = g.step, every = Math.round(g.major / step), html = '', v, p, major;
+    // 격자 선은 지도 좌표(m)로 양 끝을 잡아 toSvg 로 바꾼다 (가로 · 세로 모드 공통)
+    function gridLine(major, a, b) {
+      html += '<line class="' + (major ? 'g-major' : 'g-minor') + '" x1="' + f1(a[0]) + '" y1="' + f1(a[1]) + '" x2="' + f1(b[0]) + '" y2="' + f1(b[1]) + '"/>';
+    }
     for (v = Math.ceil(OX / step) * step; v <= OX + MW + 1e-9; v += step) {
-      major = Math.round(v / step) % every === 0; p = toSvg(v, 0)[0];
-      html += '<line class="' + (major ? 'g-major' : 'g-minor') + '" x1="' + f1(p) + '" y1="0" x2="' + f1(p) + '" y2="' + f1(VIEW_H) + '"/>';
+      major = Math.round(v / step) % every === 0;
+      gridLine(major, toSvg(v, OY), toSvg(v, OY + MH));
     }
     for (v = Math.ceil(OY / step) * step; v <= OY + MH + 1e-9; v += step) {
-      major = Math.round(v / step) % every === 0; p = toSvg(0, v)[1];
-      html += '<line class="' + (major ? 'g-major' : 'g-minor') + '" x1="0" y1="' + f1(p) + '" x2="' + VIEW_W + '" y2="' + f1(p) + '"/>';
+      major = Math.round(v / step) % every === 0;
+      gridLine(major, toSvg(OX, v), toSvg(OX + MW, v));
     }
     $('grid').innerHTML = html;
     $('mapInfo').textContent = (MAP ? '지도 ' + MW.toFixed(1) + ' × ' + MH.toFixed(1) + ' m · ' : '') +
@@ -60,8 +74,8 @@
     html = '';
     ZONES.zones.forEach(function (z) {
       if (z.rect) {
-        var a = toSvg(z.rect[0], z.rect[3]), b = toSvg(z.rect[2], z.rect[1]);
-        html += '<rect class="zone z-' + esc(z.kind) + '" x="' + f1(a[0]) + '" y="' + f1(a[1]) + '" width="' + f1(b[0] - a[0]) + '" height="' + f1(b[1] - a[1]) + '" rx="3"/>';
+        var r = svgRect(z.rect[0], z.rect[1], z.rect[2], z.rect[3]), a = [r.x, r.y];
+        html += '<rect class="zone z-' + esc(z.kind) + '" x="' + f1(r.x) + '" y="' + f1(r.y) + '" width="' + f1(r.w) + '" height="' + f1(r.h) + '" rx="3"/>';
         if (z.kind === 'plan') {
           html += '<text class="zsub" x="' + f1(a[0] + 10) + '" y="' + f1(a[1] + 20) + '">' + esc(z.marker + ' · ' + z.name + (z.sub ? ' (' + z.sub + ')' : '')) + '</text>';
         } else {
@@ -70,7 +84,9 @@
         }
       }
       if (z.marker_at) {
-        var m = toSvg(z.marker_at[0], z.marker_at[1]), side = z.marker_side || 'top', vert = side === 'left' || side === 'right';
+        var m = toSvg(z.marker_at[0], z.marker_at[1]), side = z.marker_side || 'top';
+        if (PORTRAIT) side = { top: 'right', right: 'bottom', bottom: 'left', left: 'top' }[side] || side;   // 붙은 벽도 같이 돈다
+        var vert = side === 'left' || side === 'right';
         html += vert
           ? '<g transform="translate(' + f1(m[0] - 3) + ' ' + f1(m[1] - 9) + ')"><rect class="aruco-bg" width="6" height="18"/><rect class="aruco-fg" x="1.5" y="3" width="3" height="4"/><rect class="aruco-fg" x="1.5" y="11" width="3" height="4"/></g>'
           : '<g transform="translate(' + f1(m[0] - 9) + ' ' + f1(m[1] - 3) + ')"><rect class="aruco-bg" width="18" height="6"/><rect class="aruco-fg" x="3" y="1.5" width="4" height="3"/><rect class="aruco-fg" x="11" y="1.5" width="4" height="3"/></g>';
@@ -135,7 +151,8 @@
 
   // 로봇 자세(지도 좌표 m, yaw rad)를 화면에 반영한다. showFms() 가 /fms/status 의 x · y · yaw_deg 로 부른다.
   function setRobotPose(x, y, yaw) {
-    var p = toSvg(x, y), ang = -yaw;   // 화면은 y가 아래로 커지므로 회전 방향이 반대
+    // 화면은 y가 아래로 커지므로 회전 방향이 반대. 세로 모드는 지도를 90도 돌렸으므로 90도를 더한다
+    var p = toSvg(x, y), ang = PORTRAIT ? Math.PI / 2 - yaw : -yaw;
     attrs($('robot'), { transform: 'translate(' + f1(p[0]) + ' ' + f1(p[1]) + ')' });
     attrs($('robotBody'), { transform: 'rotate(' + f1(ang * 180 / Math.PI) + ')' });
 
@@ -144,7 +161,7 @@
     done.push([x, y]);
     attrs($('routeDone'), { points: plan.length ? pts(done) : '' });
     attrs($('route'), { points: plan.length ? pts(rest) : '' });
-    // 남은 거리: 계획 경로가 있으면 경로를 따라, 없으면 목적지 goal 까지 직선 거리 (main.py 가 경로를 안 보내므로 지금은 직선)
+    // 남은 거리: 계획 경로(main.py robot.path)가 있으면 경로를 따라, 없으면 목적지 goal 까지 직선 거리
     if (state !== 'lost') $('rleft').textContent = plan.length ? (planLen - d).toFixed(1) + ' m'
       : (goalXY ? Math.hypot(goalXY[0] - x, goalXY[1] - y).toFixed(1) + ' m · 직선' : '—');
   }
@@ -279,9 +296,6 @@
     applyJob(s.job);
 
     if (inspKey(s.inspection) !== lastInspKey) showInspection(s.inspection, s.recent);
-    $('todayTotal').textContent = s.today.total + '건';
-    $('todayOk').textContent = 'PASS ' + s.today.pass_rate + '%';
-    $('todayAvg').textContent = s.today.avg;
 
     if (changed) render(); else { tick(); showFms(); }
   }
@@ -307,12 +321,6 @@
   $('eventsModal').addEventListener('click', function (e) { if (e.target === this) closeEv(); });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('eventsModal').hidden) closeEv(); });
   $('evQuery').addEventListener('click', queryEvents);
-
-  $('projToggle').addEventListener('click', function () {
-    var on = !document.body.classList.contains('proj');
-    document.body.classList.toggle('proj', on);
-    this.setAttribute('aria-pressed', String(on));
-  });
 
   // 전방 카메라 (web_video_server MJPEG). 영상이 실제로 들어올 때만 화면에 보이고,
   // 끊기면 "영상 신호 없음"을 띄운 채 5초마다 다시 연결한다.
