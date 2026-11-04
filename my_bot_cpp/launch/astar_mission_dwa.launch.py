@@ -51,8 +51,17 @@ def generate_launch_description():
         output='screen'
     )
 
+    # 4. 웹 비디오 서버 추가
+    web_video_node = Node(
+        package='web_video_server',
+        executable='web_video_server',
+        name='web_video_server',
+        output='log'  # 스트리밍 로그 도배 방지
+    )
+
     return LaunchDescription([
         localization_launch,
         rviz_node,
-        astar_mission_dwa
+        astar_mission_dwa,
+        web_video_node
     ])

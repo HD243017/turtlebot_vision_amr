@@ -42,10 +42,10 @@ class PcMissionPlanner : public rclcpp::Node {
 public:
     PcMissionPlanner() : Node("astar_mission_dwa") {
         // 코스트맵 파라미터
-        inflate_radius_  = this->declare_parameter<double>("inflate_radius", 9.0);    // 부풀리기 전체 반경(칸)
-        hard_radius_     = this->declare_parameter<double>("hard_radius", 4.5);       // 100(절대 금지) 반경(칸)
-        dyn_hard_radius_ = this->declare_parameter<double>("dyn_hard_radius", 4.5);   // 가벽 점 하나의 100 반경(칸)
-        dyn_soft_radius_ = this->declare_parameter<double>("dyn_soft_radius", 7.0);   // 가벽 점 하나의 80 반경(칸)
+        inflate_radius_  = this->declare_parameter<double>("inflate_radius", 8.0);    // 부풀리기 전체 반경(칸)
+        hard_radius_     = this->declare_parameter<double>("hard_radius", 3.5);       // 100(절대 금지) 반경(칸)
+        dyn_hard_radius_ = this->declare_parameter<double>("dyn_hard_radius", 2.5);   // 가벽 점 하나의 100 반경(칸)
+        dyn_soft_radius_ = this->declare_parameter<double>("dyn_soft_radius", 5.5);   // 가벽 점 하나의 80 반경(칸)
         start_clear_     = static_cast<int>(this->declare_parameter<int64_t>("start_clear_cells", 6));
         goal_clear_      = static_cast<int>(this->declare_parameter<int64_t>("goal_clear_cells", 3));
         simplify_path_   = this->declare_parameter<bool>("simplify_path", false);
@@ -62,18 +62,20 @@ public:
         min_block_hits_    = static_cast<int>(this->declare_parameter<int64_t>("min_block_hits", 4));   // 경로 위 최소 점 개수
         confirm_scans_     = static_cast<int>(this->declare_parameter<int64_t>("confirm_scans", 3));    // 연속 확인 횟수
         replan_cooldown_   = this->declare_parameter<double>("replan_cooldown", 2.0);         // 재탐색 후 쉬는 시간(초)
+        retry_interval_    = this->declare_parameter<double>("retry_interval", 3.0);
 
         // TF: 레이저 센서의 map 기준 위치를 얻기 위해 사용
         tf_buffer_   = std::make_unique<tf2_ros::Buffer>(this->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
         // 1. 주요 거점 좌표 설정
-        waypoints_["HOME"]    = {0.035, -0.020};
+        waypoints_["HOME"]    = {0.600, 0.450};
         waypoints_["INSPECT"] = {2.500, 0.070};
         waypoints_["PASS"]    = {3.200, 2.000};
         waypoints_["FAIL"]    = {-0.100, 1.800};
 
         last_replan_time_ = this->get_clock()->now() - rclcpp::Duration::from_seconds(100.0);
+        blocked_time_     = this->get_clock()->now();
 
         // 2. 퍼블리셔 설정
         pub_path_  = this->create_publisher<nav_msgs::msg::Path>("/planned_path", 10);
@@ -124,7 +126,7 @@ private:
     bool obstacle_detect_ = true;
     double check_ahead_ = 1.2, corridor_ = 0.25;
     double scan_use_range_ = 2.0, scan_min_range_ = 0.18, register_band_ = 0.8;
-    double wall_ignore_cells_ = 4.0, replan_cooldown_ = 2.0;
+    double wall_ignore_cells_ = 3.5, replan_cooldown_ = 2.0, retry_interval_ = 3.0;
     int min_block_hits_ = 4, confirm_scans_ = 3;
 
     double current_x_ = 0.0, current_y_ = 0.0;
@@ -139,9 +141,11 @@ private:
     bool map_received_ = false;
 
     std::vector<std::pair<double, double>> path_pts_;  // 마지막으로 보낸 경로(월드 좌표)
+    std::vector<std::pair<double, double>> last_valid_path_pts_;
     int block_count_ = 0;                              // 경로 막힘이 연속으로 확인된 횟수
     bool replan_failed_ = false;                       // 재탐색에 실패해 정지 중인지
     rclcpp::Time last_replan_time_{0, 0, RCL_ROS_TIME};
+    rclcpp::Time blocked_time_{0, 0, RCL_ROS_TIME};
 
     std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -179,10 +183,19 @@ private:
 
     int8_t costFromDist(double d) const {
         if (d <= hard_radius_) return 100;
-        double t = (d - hard_radius_) / (inflate_radius_ - hard_radius_);
-        double c = 80.0 * (1.0 - t);
-        if (c < 0.0) c = 0.0;
-        return static_cast<int8_t>(c);
+        if (d > inflate_radius_) return 0;
+
+        // hard_radius_ ~ inflate_radius_ 구간을 3등분하여 70, 50, 30 할당
+        double span = inflate_radius_ - hard_radius_;
+        double rel  = d - hard_radius_;
+
+        if (rel <= span / 3.0) {
+            return 70;
+        } else if (rel <= (span * 2.0) / 3.0) {
+            return 50;
+        } else {
+            return 30;
+        }
     }
 
     // --- [1] 맵 수신 및 코스트맵 생성 (8방향 거리 변환: 벽에서 가까울수록 100, 멀수록 80~0) ---
@@ -202,7 +215,6 @@ private:
         using QItem = std::pair<double, int>;
         std::priority_queue<QItem, std::vector<QItem>, std::greater<QItem>> pq;
 
-        // 진짜 벽(>50) 또는 미확인(-1) 칸을 시작점으로
         for (int i = 0; i < total_cells; ++i) {
             if (msg->data[i] > 50 || msg->data[i] == -1) {
                 dist_map[i] = 0.0;
@@ -221,8 +233,8 @@ private:
             pq.pop();
             double d = top.first;
             int cur = top.second;
-            if (d > dist_map[cur]) continue;       // 오래된 항목
-            if (d >= inflate_radius_) continue;    // 부풀리기 반경 도달
+            if (d > dist_map[cur]) continue;
+            if (d >= inflate_radius_) continue;
 
             int cy = cur / map_width_;
             int cx = cur % map_width_;
@@ -241,7 +253,6 @@ private:
             }
         }
 
-        // 레이저 점이 지도의 벽인지 장애물인지 구분하기 위해 벽까지 거리를 저장
         wall_dist_.assign(total_cells, 1e9f);
         for (int i = 0; i < total_cells; ++i) wall_dist_[i] = static_cast<float>(dist_map[i]);
 
@@ -381,15 +392,14 @@ private:
     // --- [3-2] 레이저를 직접 보고 경로 앞 장애물을 감지 ---
     void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
         if (!obstacle_detect_ || !map_received_ || !is_localized_) return;
-        if (!isMoving() || replan_failed_ || path_pts_.size() < 2) { block_count_ = 0; return; }
-        if ((this->get_clock()->now() - last_replan_time_).seconds() < replan_cooldown_) return;
+        if (!isMoving()) { block_count_ = 0; return; }
 
-        // 1. 레이저 센서의 map 기준 위치/방향 (TF 사용: /amcl_pose보다 최신)
+        // TF 조회
         geometry_msgs::msg::TransformStamped tfm;
         try {
             tfm = tf_buffer_->lookupTransform("map", msg->header.frame_id, tf2::TimePointZero);
         } catch (const tf2::TransformException&) {
-            return;  // TF가 아직 없으면 이번 스캔은 건너뜀
+            return;
         }
         const double sx = tfm.transform.translation.x;
         const double sy = tfm.transform.translation.y;
@@ -397,7 +407,77 @@ private:
         const double syaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y),
                                        1.0 - 2.0 * (q.y * q.y + q.z * q.z));
 
-        // 2. 로봇 앞쪽 check_ahead 미터 구간의 경로
+        // 길이 막혀 정지한 상태(replan_failed_ == true)일 때: 3초마다 스캔하여 장애물이 사라졌는지 확인
+        if (replan_failed_) {
+            double elapsed = (this->get_clock()->now() - blocked_time_).seconds();
+            if (elapsed < retry_interval_) return; // 3초가 지나지 않았으면 대기
+
+            const auto& check_path = !last_valid_path_pts_.empty() ? last_valid_path_pts_ : path_pts_;
+            int blocking_now = 0;
+            std::vector<std::pair<double, double>> retry_near_hits;
+            const double min_r = std::max(static_cast<double>(msg->range_min), scan_min_range_);
+
+            if (check_path.size() >= 2) {
+                size_t nearest = 0;
+                double best = 1e18;
+                for (size_t i = 0; i < check_path.size(); ++i) {
+                    double d = std::hypot(check_path[i].first - sx, check_path[i].second - sy);
+                    if (d < best) { best = d; nearest = i; }
+                }
+                std::vector<std::pair<double, double>> ahead;
+                double acc = 0.0;
+                for (size_t i = nearest; i < check_path.size(); ++i) {
+                    if (i > nearest) {
+                        acc += std::hypot(check_path[i].first - check_path[i - 1].first,
+                                          check_path[i].second - check_path[i - 1].second);
+                    }
+                    if (acc > check_ahead_) break;
+                    ahead.push_back(check_path[i]);
+                }
+
+                for (size_t i = 0; i < msg->ranges.size(); ++i) {
+                    double local_angle = msg->angle_min + static_cast<double>(i) * msg->angle_increment;
+                    if (std::cos(local_angle) < 0.0) continue; // [추가] 후방(90~270도) 무시, 정면 180도만 감지
+
+                    double r = msg->ranges[i];
+                    if (!std::isfinite(r) || r < min_r || r > scan_use_range_) continue;
+                    double a = local_angle + syaw;
+                    double wx = sx + r * std::cos(a);
+                    double wy = sy + r * std::sin(a);
+                    int gx = toCellX(wx), gy = toCellY(wy);
+                    if (!inMap(gx, gy)) continue;
+                    int idx = gy * map_width_ + gx;
+                    if (wall_dist_[idx] <= wall_ignore_cells_) continue; // 원래 벽은 무시
+
+                    double dmin = 1e18;
+                    for (const auto& p : ahead) dmin = std::min(dmin, std::hypot(p.first - wx, p.second - wy));
+                    if (dmin <= corridor_) ++blocking_now;
+                    if (dmin <= register_band_) retry_near_hits.push_back({wx, wy});
+                }
+            }
+
+            if (blocking_now < min_block_hits_) {
+                RCLCPP_INFO(this->get_logger(),
+                    "[AUTO-CLEAR] 3초 경과 후 정면 스캔 결과 장애물 없음(감지점 %d개). 가벽을 지우고 재출발합니다!", blocking_now);
+                clearDynamicObstacles();
+                replanAroundObstacle("auto_clear_after_3s");
+            } else {
+                RCLCPP_WARN(this->get_logger(),
+                    "[AUTO-RETRY WAIT] 3초 경과 정면 스캔: 여전히 장애물 감지됨(%d개). 가벽 재갱신 후 다시 탐색 시도...", blocking_now);
+                clearDynamicObstacles();
+                for (const auto& h : retry_near_hits) {
+                    registerDynamicObstacle(h.first, h.second);
+                }
+                publishCostmapViz();
+                replanAroundObstacle("auto_retry_with_new_scan");
+            }
+            return;
+        }
+
+        // --- 정상 주행 중일 때의 장애물 감시 ---
+        if (path_pts_.size() < 2) { block_count_ = 0; return; }
+        if ((this->get_clock()->now() - last_replan_time_).seconds() < replan_cooldown_) return;
+
         size_t nearest = 0;
         double best = 1e18;
         for (size_t i = 0; i < path_pts_.size(); ++i) {
@@ -416,21 +496,23 @@ private:
         }
         if (ahead.empty()) return;
 
-        // 3. 레이저 점을 지도에 찍고, 지도에 없는 장애물만 골라냄
         const double min_r = std::max(static_cast<double>(msg->range_min), scan_min_range_);
-        std::vector<std::pair<double, double>> near_hits;  // 경로 주변의 장애물 점 (등록 대상)
-        int corridor_hits = 0;                             // 그중 경로 위(corridor_ 이내)에 있는 점
+        std::vector<std::pair<double, double>> near_hits;
+        int corridor_hits = 0;
         for (size_t i = 0; i < msg->ranges.size(); ++i) {
+            double local_angle = msg->angle_min + static_cast<double>(i) * msg->angle_increment;
+            if (std::cos(local_angle) < 0.0) continue; // [추가] 후방(90~270도) 무시, 정면 180도만 감지
+
             double r = msg->ranges[i];
             if (!std::isfinite(r) || r < min_r || r > scan_use_range_) continue;
-            double a = msg->angle_min + static_cast<double>(i) * msg->angle_increment + syaw;
+            double a = local_angle + syaw;
             double wx = sx + r * std::cos(a);
             double wy = sy + r * std::sin(a);
             int gx = toCellX(wx), gy = toCellY(wy);
             if (!inMap(gx, gy)) continue;
             int idx = gy * map_width_ + gx;
-            if (wall_dist_[idx] <= wall_ignore_cells_) continue;  // 지도의 벽(또는 미확인) 근처는 벽으로 간주
-            if (dynamic_obstacles_[idx] >= 100) continue;         // 이미 등록한 장애물
+            if (wall_dist_[idx] <= wall_ignore_cells_) continue;
+            if (dynamic_obstacles_[idx] >= 100) continue;
 
             double dmin = 1e18;
             for (const auto& p : ahead) dmin = std::min(dmin, std::hypot(p.first - wx, p.second - wy));
@@ -444,7 +526,7 @@ private:
         block_count_ = 0;
 
         RCLCPP_WARN(this->get_logger(),
-            "[OBSTACLE] %d scan points block the path ahead. Registering %zu points and replanning...",
+            "[OBSTACLE] %d front scan points block the path ahead. Registering %zu points and replanning...",
             corridor_hits, near_hits.size());
         for (const auto& h : near_hits) registerDynamicObstacle(h.first, h.second);
         publishCostmapViz();
@@ -459,10 +541,15 @@ private:
             RCLCPP_INFO(this->get_logger(), "[REPLAN OK] new path sent (%s)", why.c_str());
             publishEvent("REPLANNED:" + why);
         } else {
-            sendEmptyPath(); // 길이 없으면 터틀봇 정지
+            if (!path_pts_.empty()) {
+                last_valid_path_pts_ = path_pts_; // [추가] 정지 전 마지막 경로 백업
+            }
+            sendEmptyPath(); // 터틀봇 정지
             replan_failed_ = true;
+            blocked_time_ = this->get_clock()->now(); // [추가] 막힌 시각 기록 (3초 카운트 시작)
             RCLCPP_ERROR(this->get_logger(),
-                "[REPLAN FAIL] no path, robot stopped. Remove the obstacle and send RETRY, or send RESET.");
+                "[REPLAN FAIL] no path, robot stopped. Will re-scan and auto-retry in %.1f seconds...",
+                retry_interval_);
             publishEvent("NO_PATH:REPLAN");
         }
     }
@@ -480,7 +567,7 @@ private:
                 double dist = std::hypot(dx, dy);
                 int8_t v = 0;
                 if (dist <= dyn_hard_radius_) v = 100;
-                else if (dist <= dyn_soft_radius_) v = 80;
+                else if (dist <= dyn_soft_radius_) v = 50; // 기존 80에서 50으로 변경
                 if (v == 0) continue;
                 int idx = ny * map_width_ + nx;
                 if (dynamic_obstacles_[idx] < v) dynamic_obstacles_[idx] = v;
@@ -555,11 +642,10 @@ private:
             if (dynamic_obstacles_[i] > work_map[i]) work_map[i] = dynamic_obstacles_[i];
         }
 
-        // 시작/목표 주변의 부풀린 영역과 가벽은 비움 (진짜 벽과 미확인 칸은 그대로)
         auto clearAround = [&](int cx, int cy, int r) {
             for (int dy = -r; dy <= r; ++dy)
                 for (int dx = -r; dx <= r; ++dx) {
-                    int ny = cy + dy, nx = cx + dx;
+                    int nx = cx + dx, ny = cy + dy;
                     if (!inMap(nx, ny)) continue;
                     int idx = ny * map_width_ + nx;
                     if (!wall_mask_[idx]) work_map[idx] = 0;
@@ -605,16 +691,15 @@ private:
                 if (!inMap(nx, ny)) continue;
 
                 int n_idx = ny * map_width_ + nx;
-                // 100(절대 벽)만 막고, 80 이하(부풀린 영역)는 페널티를 주며 통과 허용
                 if (work_map[n_idx] >= 100 || closed[n_idx]) continue;
 
-                // 대각선 이동 시 양옆 칸이 막혀 있으면 모서리를 파고들지 못하게 막음
                 if (i >= 4) {
                     if (work_map[curr.y * map_width_ + nx] >= 100 ||
                         work_map[ny * map_width_ + curr.x] >= 100) continue;
                 }
 
-                double penalty = work_map[n_idx] * 0.15; // 코스트가 80이면 +12점의 페널티
+                // 코스트(70, 50, 30)에 비례한 페널티 부여 -> 평상시엔 0인 중앙으로 가지만, 막히면 코스트를 내고 통과함
+                double penalty = work_map[n_idx] * 0.15;
                 double new_g = curr.g + step_cost[i] + penalty;
 
                 if (new_g < g_score[n_idx]) {
@@ -631,14 +716,12 @@ private:
             return false;
         }
 
-        // 경로 복원 (셀 단위)
         std::vector<std::pair<int, int>> cells;
         for (int t = end_idx; t != -1; t = parent[t]) {
             cells.push_back({t % map_width_, t / map_width_});
         }
         std::reverse(cells.begin(), cells.end());
 
-        // 월드 좌표로 변환 (옵션: 직선 단순화 후 칸 간격으로 다시 채움)
         std::vector<std::pair<double, double>> pts;
         if (simplify_path_) {
             auto simp = simplifyCells(work_map, cells);
@@ -675,7 +758,8 @@ private:
             pose.pose.orientation.w = std::cos(yaw / 2.0);
             path_msg.poses.push_back(pose);
         }
-        path_pts_ = pts;  // 레이저 감시가 이 경로를 기준으로 앞쪽을 살핌
+        path_pts_ = pts;
+        last_valid_path_pts_ = pts;
         pub_path_->publish(path_msg);
         RCLCPP_INFO(this->get_logger(), "[A* SUCCESS] Sent %zu waypoints to TurtleBot!", path_msg.poses.size());
         return true;

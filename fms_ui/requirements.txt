@@ -1,0 +1,4 @@
+flask>=3.0
+pillow>=9.0
+pyyaml>=5.4
+pymysql>=1.1
